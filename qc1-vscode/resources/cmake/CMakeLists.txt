@@ -7,11 +7,18 @@ if(NOT QC1_PROJECT_ROOT)
 endif()
 
 cmake_path(ABSOLUTE_PATH QC1_PROJECT_ROOT NORMALIZE OUTPUT_VARIABLE QC1_ROOT)
-if(NOT EXISTS "${QC1_ROOT}/Core/Src" AND NOT EXISTS "${QC1_ROOT}/Src")
-  message(FATAL_ERROR "QC1 expects Src/ or Core/Src/ under ${QC1_ROOT}")
+if(NOT QC1_SOURCE_DIR)
+  if(EXISTS "${QC1_ROOT}/Core/Src")
+    set(QC1_SOURCE_DIR "${QC1_ROOT}/Core/Src")
+  elseif(EXISTS "${QC1_ROOT}/Src")
+    set(QC1_SOURCE_DIR "${QC1_ROOT}/Src")
+  else()
+    message(FATAL_ERROR "QC1_SOURCE_DIR is required for a custom source layout")
+  endif()
 endif()
 
 file(GLOB_RECURSE QC1_C_SOURCES CONFIGURE_DEPENDS
+  "${QC1_SOURCE_DIR}/*.c"
   "${QC1_ROOT}/Core/Src/*.c"
   "${QC1_ROOT}/Drivers/STM32F1xx_HAL_Driver/Src/*.c"
   "${QC1_ROOT}/Middlewares/*.c"
@@ -72,6 +79,7 @@ else()
 endif()
 
 file(GLOB_RECURSE QC1_HEADERS CONFIGURE_DEPENDS
+  "${QC1_ROOT}/*.h"
   "${QC1_ROOT}/Core/*.h"
   "${QC1_ROOT}/Drivers/*.h"
   "${QC1_ROOT}/Middlewares/*.h"
@@ -79,6 +87,7 @@ file(GLOB_RECURSE QC1_HEADERS CONFIGURE_DEPENDS
   "${QC1_ROOT}/App/*.h"
   "${QC1_ROOT}/Inc/*.h"
 )
+list(FILTER QC1_HEADERS EXCLUDE REGEX "/(build|out|node_modules|\\.git|cache)/")
 set(QC1_INCLUDE_DIRS "${QC1_ROOT}/Core/Inc" "${QC1_ROOT}/Inc")
 foreach(QC1_HEADER IN LISTS QC1_HEADERS)
   get_filename_component(QC1_HEADER_DIR "${QC1_HEADER}" DIRECTORY)

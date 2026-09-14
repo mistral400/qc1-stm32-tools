@@ -157,7 +157,7 @@ async function sendLiixModelTurn(request) {
     }
     catch (error) {
         if (timedOut && !request.signal?.aborted)
-            throw new Error(`La génération a dépassé le délai Liix de ${timeoutMs} ms.`);
+            throw new Error(`La génération a dépassé le délai Liix de ${timeoutMs} ms.`, { cause: error });
         throw error;
     }
     finally {
@@ -406,7 +406,7 @@ async function fetchWithTimeout(url, init, label, timeoutOverride) {
         catch (error) {
             if (isAbort(error))
                 throw error;
-            throw new Error(`${label}: connexion impossible à ${url}. ${error instanceof Error ? error.message : String(error)}`);
+            throw new Error(`${label}: connexion impossible à ${url}. ${error instanceof Error ? error.message : String(error)}`, { cause: error });
         }
     }
     const timeoutMs = timeoutOverride ?? configuration().get("liix.aiTimeoutMs", 120000);
@@ -419,10 +419,10 @@ async function fetchWithTimeout(url, init, label, timeoutOverride) {
     }
     catch (error) {
         if (timedOut && !init.signal?.aborted)
-            throw new Error(`${label}: délai de ${timeoutMs} ms dépassé pour ${url}.`);
+            throw new Error(`${label}: délai de ${timeoutMs} ms dépassé pour ${url}.`, { cause: error });
         if (isAbort(error))
             throw error;
-        throw new Error(`${label}: connexion impossible à ${url}. ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`${label}: connexion impossible à ${url}. ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
     finally {
         clearTimeout(timer);

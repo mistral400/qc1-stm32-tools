@@ -14,6 +14,7 @@
     "media/**",
     "resources/cmake/**",
     "QC1_CODES.md",
+    "AUDIT_PORTABILITY.md",
     "CHANGELOG.md",
     "README.md",
     "LICENSE",
@@ -28,7 +29,6 @@
   ],
   "activationEvents": [
     "onView:qc1.panel",
-    "onView:liixAiChat",
     "workspaceContains:CMakeLists.txt",
     "workspaceContains:**/*.ioc",
     "workspaceContains:**/*.eww",
@@ -37,15 +37,7 @@
     "onCommand:qc1.flash",
     "onCommand:qc1.run",
     "onCommand:qc1.status",
-    "onCommand:qc1.createDiagnosticReport",
-    "onCommand:liix.newChat",
-    "onCommand:liix.explainActiveFile",
-    "onCommand:liix.fixDiagnostics",
-    "onCommand:liix.openTerminal",
-    "onCommand:liix.stopAgent",
-    "onCommand:liix.undoLastEdit",
-    "onCommand:liix.openLastDiff",
-    "onCommand:liix.refreshLocalModels"
+    "onCommand:qc1.createDiagnosticReport"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -55,11 +47,6 @@
           "id": "qc1",
           "title": "QC1 STM32",
           "icon": "media/icon.svg"
-        },
-        {
-          "id": "liix-ai",
-          "title": "Liix AI",
-          "icon": "media/liix-ai.svg"
         }
       ]
     },
@@ -68,13 +55,6 @@
         {
           "id": "qc1.panel",
           "name": "STM32 Tools",
-          "type": "webview"
-        }
-      ],
-      "liix-ai": [
-        {
-          "id": "liixAiChat",
-          "name": "Liix AI",
           "type": "webview"
         }
       ]
@@ -167,83 +147,21 @@
       {
         "command": "qc1.dev",
         "title": "QC1: Dev Mode"
-      },
-      {
-        "command": "liix.newChat",
-        "title": "New Chat",
-        "category": "Liix"
-      },
-      {
-        "command": "liix.explainActiveFile",
-        "title": "Explain Active File",
-        "category": "Liix"
-      },
-      {
-        "command": "liix.fixDiagnostics",
-        "title": "Fix Diagnostics",
-        "category": "Liix"
-      },
-      {
-        "command": "liix.openTerminal",
-        "title": "Open Terminal",
-        "category": "Liix"
-      },
-      {
-        "command": "liix.stopAgent",
-        "title": "Stop Agent",
-        "category": "Liix"
-      },
-      {
-        "command": "liix.undoLastEdit",
-        "title": "Undo Last Edit",
-        "category": "Liix"
-      },
-      {
-        "command": "liix.openLastDiff",
-        "title": "Open Last Diff",
-        "category": "Liix"
-      },
-      {
-        "command": "liix.refreshLocalModels",
-        "title": "Refresh Local Models",
-        "category": "Liix"
       }
     ],
     "menus": {
       "commandPalette": [
-        {
-          "command": "qc1.build"
-        },
-        {
-          "command": "qc1.clean"
-        },
-        {
-          "command": "qc1.rebuild"
-        },
-        {
-          "command": "qc1.flash"
-        },
-        {
-          "command": "qc1.run"
-        },
-        {
-          "command": "qc1.status"
-        },
-        {
-          "command": "qc1.detectStlink"
-        },
-        {
-          "command": "qc1.openSerial"
-        },
-        {
-          "command": "qc1.startOpenOcd"
-        },
-        {
-          "command": "qc1.configure"
-        },
-        {
-          "command": "qc1.createDiagnosticReport"
-        }
+        { "command": "qc1.build" },
+        { "command": "qc1.clean" },
+        { "command": "qc1.rebuild" },
+        { "command": "qc1.flash" },
+        { "command": "qc1.run" },
+        { "command": "qc1.status" },
+        { "command": "qc1.detectStlink" },
+        { "command": "qc1.openSerial" },
+        { "command": "qc1.startOpenOcd" },
+        { "command": "qc1.configure" },
+        { "command": "qc1.createDiagnosticReport" }
       ],
       "view/title": [
         {
@@ -269,6 +187,25 @@
       {
         "title": "QC1 STM32 Tools",
         "properties": {
+          "qc1.toolPaths": {
+            "type": "object",
+            "default": {},
+            "additionalProperties": { "type": "string" },
+            "scope": "resource",
+            "description": "Chemins explicites des outils de diagnostic (ex.: arm-none-eabi-gdb, STM32CubeProgrammer, J-Link, Python)."
+          },
+          "qc1.elfPath": {
+            "type": "string",
+            "default": "",
+            "scope": "resource",
+            "description": "Artefact ELF explicite (relatif au projet ou absolu). Vide: File API CMake si disponible, puis nom de cible."
+          },
+          "qc1.targetMcu": {
+            "type": "string",
+            "default": "",
+            "scope": "resource",
+            "description": "MCU déclaré, utilisé comme preuve dans le rapport et pour détecter les conflits."
+          },
           "qc1.projectPath": {
             "type": "string",
             "default": "",
@@ -375,187 +312,23 @@
             "description": "Visualizer theme"
           }
         }
-      },
-      {
-        "title": "Liix AI",
-        "properties": {
-          "liix.provider": {
-            "type": "string",
-            "default": "local",
-            "enum": [
-              "liix",
-              "local"
-            ],
-            "description": "AI provider to use: Liix cloud API or local model server"
-          },
-          "liix.apiUrl": {
-            "type": "string",
-            "default": "https://true-mega-shall-icq.trycloudflare.com",
-            "description": "Liix API URL"
-          },
-          "liix.apiKey": {
-            "type": "string",
-            "default": "",
-            "description": "Liix API Key"
-          },
-          "liix.localApiUrl": {
-            "type": "string",
-            "default": "http://localhost:1234",
-            "description": "Local AI server URL. Example: Ollama http://localhost:11434 or LM Studio http://localhost:1234"
-          },
-          "liix.localApiType": {
-            "type": "string",
-            "default": "openai-compatible",
-            "enum": [
-              "ollama",
-              "openai-compatible"
-            ],
-            "description": "Local AI server API type"
-          },
-          "liix.localModel": {
-            "type": "string",
-            "default": "",
-            "description": "Exact local model ID returned by LM Studio or Ollama"
-          },
-          "liix.supportsToolCalling": {
-            "type": "string",
-            "default": "auto",
-            "enum": [
-              "auto",
-              "native",
-              "fallback"
-            ],
-            "description": "Use native tool calling, automatic fallback, or structured fallback"
-          },
-          "liix.defaultModel": {
-            "type": "string",
-            "default": "liix-code-0.1",
-            "description": "Default Liix model selected in the webview"
-          },
-          "liix.userName": {
-            "type": "string",
-            "default": "Utilisateur Liix",
-            "description": "Display name used in the Liix Account page"
-          },
-          "liix.accountEmail": {
-            "type": "string",
-            "default": "",
-            "description": "Optional account email/provider label shown in the Liix Account page"
-          },
-          "liix.language": {
-            "type": "string",
-            "default": "fr",
-            "enum": [
-              "fr",
-              "en"
-            ],
-            "description": "Liix UI language"
-          },
-          "liix.uiAnimations": {
-            "type": "boolean",
-            "default": true,
-            "description": "Enable lightweight Liix UI animations"
-          },
-          "liix.telemetry": {
-            "type": "boolean",
-            "default": false,
-            "description": "Enable Liix telemetry"
-          },
-          "liix.agentMode": {
-            "type": "string",
-            "default": "chat",
-            "enum": [
-              "chat",
-              "agent",
-              "full"
-            ],
-            "description": "Default Liix agent mode"
-          },
-          "liix.aiTimeoutMs": {
-            "type": "number",
-            "default": 120000,
-            "minimum": 5000,
-            "maximum": 600000,
-            "description": "AI request and tool execution timeout"
-          },
-          "liix.maxTokens": {
-            "type": "number",
-            "default": 4096,
-            "minimum": 256,
-            "maximum": 131072,
-            "description": "Maximum response tokens target"
-          },
-          "liix.maxAgentSteps": {
-            "type": "number",
-            "default": 20,
-            "minimum": 1,
-            "maximum": 50,
-            "description": "Maximum model iterations in one Liix agent task"
-          },
-          "liix.maxToolCalls": {
-            "type": "number",
-            "default": 60,
-            "minimum": 1,
-            "maximum": 200,
-            "description": "Maximum structured tool calls in one Liix task"
-          },
-          "liix.contextBudgetChars": {
-            "type": "number",
-            "default": 80000,
-            "minimum": 8000,
-            "maximum": 1000000,
-            "description": "Approximate character budget for the active local-model conversation"
-          },
-          "liix.temperature": {
-            "type": "number",
-            "default": 0.2,
-            "minimum": 0,
-            "maximum": 2,
-            "description": "Default model temperature"
-          },
-          "liix.permissions.terminal": {
-            "type": "string",
-            "default": "ask",
-            "enum": [
-              "none",
-              "ask",
-              "allow"
-            ],
-            "description": "Terminal command permission policy"
-          },
-          "liix.permissions.files": {
-            "type": "string",
-            "default": "ask",
-            "enum": [
-              "none",
-              "ask",
-              "allow"
-            ],
-            "description": "File write permission policy"
-          },
-          "liix.permissions.git": {
-            "type": "string",
-            "default": "ask",
-            "enum": [
-              "read",
-              "ask",
-              "allow"
-            ],
-            "description": "Git command permission policy"
-          }
-        }
       }
     ]
   },
   "scripts": {
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
     "compile": "node ./node_modules/typescript/bin/tsc",
     "test": "npm run compile && node --test test/*.test.js",
     "vscode:prepublish": "npm run compile"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^20.19.43",
     "@types/vscode": "^1.118.0",
-    "@vscode/vsce": "^3.9.1",
-    "typescript": "^5.0.0"
+    "@vscode/vsce": "^3.9.2",
+    "eslint": "^10.10.0",
+    "typescript": "^5.0.0",
+    "typescript-eslint": "^8.70.0"
   }
 }

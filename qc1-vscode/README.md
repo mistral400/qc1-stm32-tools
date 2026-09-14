@@ -1,25 +1,10 @@
 # QC1 STM32F103 CMake Tools
 
-QC1 permet de compiler et flasher un projet STM32F103 directement depuis VS Code. La compilation utilise **CMake + Ninja**. Si le firmware possède son propre `CMakeLists.txt`, QC1 l'utilise; sinon, QC1 utilise le projet CMake embarqué dans le VSIX.
+QC1 permet de compiler et flasher un projet STM32F103 directement depuis VS Code. Le moteur intégré utilise **CMake + Ninja**. Si le firmware possède son propre `CMakeLists.txt`, QC1 conserve son générateur et sa toolchain; sinon, QC1 utilise le projet CMake embarqué dans le VSIX.
 
-## Liix AI — agent local avec LM Studio
+Le rapport `QC1: Créer un rapport de diagnostic` comprend vingt sections et un résumé JSON `reportSchemaVersion: 2`. Il inspecte les chemins, la casse, CMake, les outils, les extensions, l'OS et le matériel avec des limites de lecture et des timeouts. Voir [l'audit de portabilité](AUDIT_PORTABILITY.md) pour les contrôles, tests et limites.
 
-L'icône **Liix AI** ouvre maintenant un assistant de programmation agentique. En mode Agent ou Full, le modèle peut demander des outils structurés pour inspecter le workspace, lire et rechercher des fichiers, consulter les diagnostics, appliquer une modification, lancer un build ou des tests et relire Git. Chaque résultat est réinjecté dans la conversation avant le tour suivant du modèle.
-
-Pour utiliser LM Studio :
-
-1. démarre le serveur local de LM Studio et charge un modèle de code;
-2. ouvre **Liix AI → Settings → Local Runtime**;
-3. sélectionne `Local / LM Studio` et `OpenAI Compatible`;
-4. indique l'endpoint enregistré par LM Studio, souvent `http://localhost:1234`;
-5. clique sur **Test Connection**, puis **Refresh local models**;
-6. choisis le nom exact retourné par `/v1/models`.
-
-Le provider local est le défaut pour une nouvelle configuration; Liix Cloud doit être sélectionné explicitement.
-
-Liix utilise `/v1/chat/completions` avec l'historique `system/user/assistant/tool`. Le function calling natif est prioritaire; le mode `Auto` retombe sur un format `<tool_call>` contrôlé lorsque le modèle refuse les tools. Le streaming SSE est affiché dès les premiers tokens, sans animation de frappe simulée.
-
-Les modes gardent des limites différentes : Chat lit sans modifier; Agent demande une confirmation pour les écritures et commandes; Full automatise les opérations de risque faible ou moyen autorisées, mais conserve une confirmation pour le risque élevé. Les chemins hors workspace et les commandes destructives telles que `git reset --hard`, `git clean -fd`, `git push --force`, `sudo` et `rm -rf` restent bloqués.
+Les réglages facultatifs `qc1.toolPaths`, `qc1.targetMcu` et `qc1.elfPath` permettent de déclarer des outils supplémentaires, une preuve de MCU et un artefact de build personnalisé.
 
 ## Par quoi commencer
 
@@ -30,7 +15,7 @@ Les modes gardent des limites différentes : Chat lit sans modifier; Agent deman
    ```
 
 2. Redémarre VS Code. Les extensions **CMake Tools** et **Embedded Build Tools** sont installées automatiquement. Au premier lancement, Embedded Build Tools télécharge CMake, Ninja et ARM GCC, puis les conserve dans le stockage de VS Code.
-3. Ouvre le dossier du firmware, ou un workspace qui le contient. QC1 détecte les structures `Src/` + `Inc/` et `Core/Src/` + `Core/Inc/`.
+3. Ouvre le dossier du firmware, ou un workspace qui le contient. QC1 inspecte les sources dans les dossiers personnalisés et les références CMake; les noms de dossiers conservent leur casse exacte.
 4. Ouvre l'icône **QC1 STM32** dans la barre latérale.
 5. Lance **Show STM32 Status**, puis **Build Project**.
 6. Branche le ST-Link et lance **Flash STM32**.
@@ -62,7 +47,7 @@ MonProjet/
 └── STM32F103xxxx_FLASH.ld
 ```
 
-Le startup et le linker sont obligatoires. `Core/`, `Drivers/`, HAL, un `Makefile` et les scripts externes ne le sont pas.
+Le moteur intégré exige un startup et un linker non ambigus. Un projet CMake natif peut les générer ou les fournir via une bibliothèque : leur absence lors du scan ne bloque pas automatiquement la configuration. `Core/`, `Drivers/` et HAL restent facultatifs.
 
 ## Exemple prêt à copier : faire clignoter la LED D1-1 sans HAL
 

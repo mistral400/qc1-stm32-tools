@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add bounded, case-aware project discovery, static CMake analysis and existing File API inspection.
+- Recognize custom sources/startups, linker MEMORY and ambiguous MCU evidence without blocking native CMake on CubeMX layout assumptions.
+- Add diagnostic schema v2 with OS, extension, toolchain, USB/serial, MCU and structured finding sections; redact before JSON serialization.
+- Respect multi-root settings and native CMake generators; harden process timeouts, output limits, Tcl/terminal arguments and build concurrency.
+- Add ESLint and portability/integration regression tests. See AUDIT_PORTABILITY.md for validation and platform limitations.
+
 ## 0.3.1
 
 ### Added

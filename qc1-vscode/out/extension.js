@@ -34,18 +34,26 @@
  * sont générés automatiquement et ne doivent normalement pas être édités à la main.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.QC1PanelProvider = void 0;
+exports.getQc1Status = getQc1Status;
+exports.getProjectDiagnostics = getProjectDiagnostics;
+exports.buildProcessInvocations = buildProcessInvocations;
 exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = require("vscode");
-const child_process_1 = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const processTools_1 = require("./qc1/processTools");
+const filesystem_1 = require("./qc1/filesystem");
+const projectDiagnostics_1 = require("./qc1/projectDiagnostics");
+const systemInspection_1 = require("./qc1/systemInspection");
+const cmakeFileApi_1 = require("./qc1/cmakeFileApi");
+const extensionInventory_1 = require("./qc1/extensionInventory");
 const dashboardState_1 = require("./dashboard/dashboardState");
 const dashboardHtml_1 = require("./dashboard/dashboardHtml");
 const progressManager_1 = require("./dashboard/progressManager");
 const qc1Parser_1 = require("./qc1/qc1Parser");
-const aiPanel_1 = require("./ai/aiPanel");
 const projectDiscovery_1 = require("./qc1/projectDiscovery");
 const hardware_1 = require("./qc1/hardware");
 const diagnosticReport_1 = require("./qc1/diagnosticReport");
@@ -57,12 +65,25 @@ let stlinkProbeStatus = "non testé";
 let embeddedCmakePath = "";
 let embeddedGccPath = "";
 let embeddedNinjaPath = "";
+const projectCache = new Map();
+function discoverProject(root) {
+    const cached = projectCache.get(root);
+    if (cached && Date.now() - cached.time < 1500)
+        return cached.value;
+    const value = (0, projectDiscovery_1.findStm32Project)(root);
+    if (projectCache.size > 20)
+        projectCache.clear();
+    projectCache.set(root, { time: Date.now(), value });
+    return value;
+}
 /**
  * Active la dépendance Embedded Build Tools et récupère ses exécutables.
  * `ensureToolsInstalled()` peut afficher/télécharger les outils de son côté. Son API
  * renvoie seulement terminé/échoué : elle n'expose pas une progression en octets à QC1.
  */
 async function initializeEmbeddedBuildTools() {
+    if (!vscode.workspace.isTrusted)
+        return;
     const extension = vscode.extensions.getExtension("mylonics.embedded-build-tools");
     if (!extension) {
         return;
@@ -90,54 +111,31 @@ function fileExists(filePath) {
     }
 }
 function getWorkspaceRoot() {
-    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const active = vscode.window.activeTextEditor?.document.uri;
+    const activeRoot = active ? vscode.workspace.getWorkspaceFolder(active)?.uri.fsPath : undefined;
+    const roots = [...new Set([activeRoot, ...(vscode.workspace.workspaceFolders || []).filter(folder => folder.uri.scheme === "file").map(folder => folder.uri.fsPath)].filter((root) => Boolean(root)))];
+    return roots.find(root => vscode.workspace.getConfiguration("qc1", vscode.Uri.file(root)).get("projectPath", "").trim() || discoverProject(root)) || roots[0];
 }
-function getPathCandidates(name) {
-    const pathValue = process.env.PATH || "";
-    const directories = pathValue.split(path.delimiter).filter(Boolean);
-    const extensions = os.platform() === "win32"
-        ? (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM")
-            .split(";")
-            .filter(Boolean)
-        : [""];
-    const candidates = [];
-    for (const dir of directories) {
-        if (os.platform() === "win32") {
-            const lowerName = name.toLowerCase();
-            const hasKnownExt = extensions.some((ext) => lowerName.endsWith(ext.toLowerCase()));
-            if (hasKnownExt) {
-                candidates.push(path.join(dir, name));
-            }
-            else {
-                for (const ext of extensions) {
-                    candidates.push(path.join(dir, `${name}${ext}`));
-                }
-            }
-        }
-        else {
-            candidates.push(path.join(dir, name));
-        }
-    }
-    return candidates;
+function qc1Configuration(root = getWorkspaceRoot()) {
+    return vscode.workspace.getConfiguration("qc1", root ? vscode.Uri.file(root) : undefined);
 }
 /** Cherche un exécutable dans le PATH courant, avec PATHEXT sous Windows. */
 function findExecutable(name) {
-    for (const candidate of getPathCandidates(name)) {
-        if (fileExists(candidate)) {
-            return candidate;
-        }
-    }
-    return null;
+    return (0, processTools_1.resolveExecutable)(name) || null;
 }
 function getExistingSettingPath(config, key) {
     const configuredPath = (config.get(key) || "").trim();
-    return configuredPath && fileExists(configuredPath) ? configuredPath : "";
+    if (!configuredPath)
+        return "";
+    const resolved = (0, filesystem_1.resolveUserPath)(configuredPath, getWorkspaceRoot() || process.cwd());
+    return (0, processTools_1.executableExists)(resolved) ? resolved : (0, processTools_1.resolveExecutable)(configuredPath);
 }
 function getExecutableSettingPath(config, key, fallbackName) {
     const configured = (config.get(key) || "").trim();
     if (configured) {
-        if (fileExists(configured))
-            return configured;
+        const resolved = (0, filesystem_1.resolveUserPath)(configured, getWorkspaceRoot() || process.cwd());
+        if ((0, processTools_1.executableExists)(resolved))
+            return resolved;
         const configuredFromPath = findExecutable(configured);
         if (configuredFromPath)
             return configuredFromPath;
@@ -206,8 +204,8 @@ function isAllowedQc1Command(command) {
  * les artefacts et les outils, puis retourne une photographie cohérente.
  */
 function getQc1Status(context) {
-    const config = vscode.workspace.getConfiguration("qc1");
     const workspaceRoot = getWorkspaceRoot() || "";
+    const config = vscode.workspace.getConfiguration("qc1", workspaceRoot ? vscode.Uri.file(workspaceRoot) : undefined);
     const configuredProjectPath = (config.get("projectPath") || "").trim();
     const autoDetectProject = config.get("autoDetectProject", true);
     const configuredCmakePath = getExistingSettingPath(config, "cmakePath");
@@ -216,8 +214,9 @@ function getQc1Status(context) {
     const requestedProjectPath = workspaceRoot
         ? (0, projectDiscovery_1.resolveConfiguredProjectPath)(configuredProjectPath, workspaceRoot)
         : configuredProjectPath;
-    const detectedProject = !configuredProjectPath && autoDetectProject && requestedProjectPath && fileExists(requestedProjectPath)
-        ? (0, projectDiscovery_1.findStm32Project)(requestedProjectPath)
+    const workspaceRoots = [...new Set([requestedProjectPath, ...(vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath)].filter(Boolean))];
+    const detectedProject = !configuredProjectPath && autoDetectProject
+        ? workspaceRoots.map(root => discoverProject(root)).find(Boolean)
         : null;
     const projectInspection = detectedProject || (requestedProjectPath
         ? (0, projectDiscovery_1.inspectStm32Project)(requestedProjectPath)
@@ -245,7 +244,10 @@ function getQc1Status(context) {
         ? (path.isAbsolute(buildDirectory) ? buildDirectory : path.join(projectPath, buildDirectory))
         : "";
     const outputName = nativeCmakeOk ? projectInspection.projectName : "firmware";
-    const elfPath = buildPath ? path.join(buildPath, `${outputName}.elf`) : "";
+    const fileApi = nativeCmakeOk ? (0, cmakeFileApi_1.readFileApi)(buildPath, projectPath) : undefined;
+    const targets = fileApi?.targets.filter(t => t.type === "EXECUTABLE" && (!t.configuration || t.configuration === config.get("buildType", "Debug"))) || [];
+    const configuredElf = config.get("elfPath", "");
+    const elfPath = configuredElf ? (0, filesystem_1.resolveUserPath)(configuredElf, projectPath) : targets.length === 1 && targets[0].artifacts.length === 1 ? targets[0].artifacts[0] : buildPath ? path.join(buildPath, `${outputName}.elf`) : "";
     const binPath = buildPath ? path.join(buildPath, `${outputName}.bin`) : "";
     const pathCmake = findExecutable(os.platform() === "win32" ? "cmake.exe" : "cmake");
     const cmakePath = configuredCmakePath || embeddedCmakePath || pathCmake || "";
@@ -265,7 +267,7 @@ function getQc1Status(context) {
     const stlinkPath = getExecutableSettingPath(config, "stlinkPath", os.platform() === "win32" ? "st-info.exe" : "st-info");
     const serialPort = findSerialPort((config.get("serialPort") || "").trim());
     const baudRate = config.get("baudRate", 19200);
-    const projectComplete = projectOk && sourceOk && startupOk && linkerScriptOk && cmakeProjectReady;
+    const projectComplete = projectOk && cmakeProjectReady && (nativeCmakeOk || (sourceOk && startupOk && linkerScriptOk));
     return {
         projectPath,
         projectLayout: projectInspection.layout,
@@ -413,13 +415,13 @@ function getProjectDiagnostics(status) {
             checkedPath: status.cmakeSourcePath || "--"
         });
     }
-    if (!status.sourceOk) {
+    if (!status.sourceOk && !status.nativeCmakeOk) {
         diagnostics.push({
             code: "QC1-PRJ-002",
             level: "error",
             title: "SOURCES_INTROUVABLES",
             message: "Dossier de sources introuvable",
-            cause: "QC1 accepte Src/ ou Core/Src/",
+            cause: "Aucune source C/C++ trouvée dans les limites du scan",
             checkedPath: status.sourcePath || status.projectPath
         });
     }
@@ -436,17 +438,17 @@ function getProjectDiagnostics(status) {
     if (!status.startupOk) {
         diagnostics.push({
             code: "QC1-PRJ-004",
-            level: "error",
+            level: status.nativeCmakeOk ? "warning" : "error",
             title: "STARTUP_INTROUVABLE",
-            message: "Startup STM32F103 introuvable",
-            cause: "Le projet doit contenir startup_stm32f103*.s",
+            message: "Startup non résolu ou ambigu",
+            cause: "Startup générique/personnalisé accepté; CMake peut le générer ou le fournir via une bibliothèque",
             checkedPath: status.projectPath
         });
     }
     if (!status.linkerScriptOk) {
         diagnostics.push({
             code: "QC1-PRJ-005",
-            level: "error",
+            level: status.nativeCmakeOk ? "warning" : "error",
             title: "LINKER_SCRIPT_INTROUVABLE",
             message: "Linker script introuvable",
             cause: "Le projet doit contenir un fichier .ld",
@@ -481,7 +483,7 @@ function getToolDiagnostic(status, command) {
             checkedPath: status.cmakePath || "PATH"
         };
     }
-    if (!status.ninjaOk && ["build", "clean", "rebuild", "tsmake", "flash", "run"].includes(command)) {
+    if (!status.nativeCmakeOk && !status.ninjaOk && ["build", "clean", "rebuild", "tsmake", "flash", "run"].includes(command)) {
         return {
             code: "QC1-TOOL-004",
             level: "error",
@@ -491,7 +493,7 @@ function getToolDiagnostic(status, command) {
             checkedPath: status.ninjaPath || "PATH"
         };
     }
-    if (!status.compilerOk && ["build", "rebuild", "tsmake", "flash", "run"].includes(command)) {
+    if (!status.nativeCmakeOk && !status.compilerOk && ["build", "rebuild", "tsmake", "flash", "run"].includes(command)) {
         return {
             code: "QC1-TOOL-002",
             level: "error",
@@ -564,7 +566,7 @@ function createQc1ErrorFromProcess(error, command, cwd, stdout, stderr) {
     });
 }
 // === CONSTRUCTION ET EXÉCUTION SÉCURISÉE DES COMMANDES =====================
-/** Protège un argument qui sera placé dans la commande shell CMake. */
+/** Representation for logs only; never reuse this display string for execution. */
 function quoteArg(arg) {
     return `"${arg.replace(/"/g, '\\"')}"`;
 }
@@ -578,107 +580,56 @@ function getExecutionEnv(status) {
         status.stFlashOk ? path.dirname(status.stFlashPath) : "",
         status.stlinkToolOk ? path.dirname(status.stlinkPath) : ""
     ].filter(Boolean);
-    const currentPath = process.env.PATH || "";
+    const environment = { ...process.env };
+    const pathKey = Object.keys(environment).find(key => os.platform() === "win32" ? key.toUpperCase() === "PATH" : key === "PATH") || "PATH";
+    const currentPath = environment[pathKey] || "";
+    delete environment[pathKey];
     return {
-        ...process.env,
+        ...environment,
         PATH: [...new Set(toolDirectories), currentPath].filter(Boolean).join(path.delimiter)
     };
 }
 /** Exécute une petite commande de lecture avec timeout; ne rejette jamais la Promise. */
 function runDiagnosticProcess(executable, args, cwd, env) {
-    return new Promise((resolve) => {
-        (0, child_process_1.execFile)(executable, args, {
-            cwd,
-            env,
-            encoding: "utf8",
-            timeout: 8000,
-            maxBuffer: 512 * 1024
-        }, (error, stdout, stderr) => {
-            resolve({
-                exitCode: error ? getExitCode(error) ?? 1 : 0,
-                stdout: stdout || "",
-                stderr: stderr || ""
-            });
-        });
-    });
-}
-function firstMeaningfulLine(output) {
-    return output
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .find(Boolean) || "--";
-}
-/** Interroge en parallèle les versions utilisées dans le rapport partageable. */
-async function collectDiagnosticToolReports(status) {
-    const specifications = [
-        { name: "CMake", detected: status.cmakeOk, source: status.cmakeSource, path: status.cmakePath, args: ["--version"] },
-        { name: "Ninja", detected: status.ninjaOk, source: status.ninjaSource, path: status.ninjaPath, args: ["--version"] },
-        { name: "ARM GCC", detected: status.compilerOk, source: status.compilerSource, path: status.compilerPath, args: ["--version"] },
-        { name: "OpenOCD", detected: status.openocdOk, source: status.openocdSource, path: status.openocdPath, args: ["--version"] },
-        { name: "st-flash", detected: status.stFlashOk, source: status.stFlashSource, path: status.stFlashPath, args: ["--version"] },
-        { name: "st-info", detected: status.stlinkToolOk, source: status.stlinkToolOk ? "setting/PATH" : "introuvable", path: status.stlinkPath, args: ["--version"] }
-    ];
-    const environment = getExecutionEnv(status);
-    return Promise.all(specifications.map(async (tool) => {
-        if (!tool.detected) {
-            return { ...tool, version: "--" };
-        }
-        const result = await runDiagnosticProcess(tool.path, tool.args, status.projectPath || undefined, environment);
-        return {
-            name: tool.name,
-            detected: tool.detected,
-            source: tool.source,
-            path: tool.path,
-            version: firstMeaningfulLine(`${result.stdout}\n${result.stderr}`)
-        };
+    if (!vscode.workspace.isTrusted)
+        return Promise.resolve({ exitCode: null, stdout: "", stderr: "Non exécuté: workspace non approuvé." });
+    return (0, processTools_1.runProcess)(executable, args, { cwd, env, timeoutMs: 8000 }).then(result => ({
+        ...result, stderr: [result.error, result.stderr].filter(Boolean).join("\n")
     }));
 }
-function isPathInside(candidate, root) {
-    if (!candidate || !root)
-        return false;
-    const relative = path.relative(root, candidate);
-    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-/** Produit une arborescence limitée sans lire le contenu des sources. */
-function collectProjectTree(root, maxEntries = 250, maxDepth = 4) {
-    if (!root || !fileExists(root))
-        return "Projet introuvable.";
-    const ignored = new Set([".git", ".vscode", "build", "dist", "node_modules", "out", "__pycache__"]);
-    const lines = ["./"];
-    let truncated = false;
-    function walk(current, depth) {
-        if (depth > maxDepth || lines.length >= maxEntries) {
-            truncated = true;
-            return;
+async function collectDiagnosticToolReports(status) {
+    const configured = {};
+    const sources = {};
+    for (const [name, file, source, ok] of [
+        ["cmake", status.cmakePath, status.cmakeSource, status.cmakeOk],
+        ["ninja", status.ninjaPath, status.ninjaSource, status.ninjaOk],
+        ["arm-none-eabi-gcc", status.compilerPath, status.compilerSource, status.compilerOk],
+        ["openocd", status.openocdPath, status.openocdSource, status.openocdOk],
+        ["st-info", status.stlinkPath, "configuration/PATH", status.stlinkToolOk]
+    ])
+        if (ok) {
+            configured[name] = file;
+            sources[name] = source;
         }
-        let entries;
-        try {
-            entries = fs.readdirSync(current, { withFileTypes: true })
-                .filter((entry) => !ignored.has(entry.name) && !entry.name.startsWith("."))
-                .sort((left, right) => left.name.localeCompare(right.name));
-        }
-        catch {
-            return;
-        }
-        for (const entry of entries) {
-            if (lines.length >= maxEntries) {
-                truncated = true;
-                return;
-            }
-            const fullPath = path.join(current, entry.name);
-            const relative = path.relative(root, fullPath);
-            lines.push(`${"  ".repeat(depth)}${relative}${entry.isDirectory() ? "/" : ""}`);
-            if (entry.isDirectory() && !entry.isSymbolicLink()) {
-                walk(fullPath, depth + 1);
-            }
+    const scope = status.projectPath ? vscode.Uri.file(status.projectPath) : undefined;
+    for (const [name, value] of Object.entries(vscode.workspace.getConfiguration("qc1", scope).get("toolPaths", {}))) {
+        if (typeof value === "string" && value.trim()) {
+            configured[name] = (0, filesystem_1.resolveUserPath)(value, status.projectPath || process.cwd());
+            sources[name] = "configuration QC1 toolPaths";
         }
     }
-    walk(root, 1);
-    if (truncated)
-        lines.push(`... structure limitée à ${maxEntries} entrées et ${maxDepth} niveaux`);
-    return lines.join("\n");
+    const cmakeTool = vscode.workspace.getConfiguration("cmake", scope).get("cmakePath");
+    if (!configured.cmake && cmakeTool) {
+        configured.cmake = cmakeTool;
+        sources.cmake = "CMake Tools setting";
+    }
+    const cortex = vscode.workspace.getConfiguration("cortex-debug", scope).get("armToolchainPath");
+    const dirs = [status.compilerOk ? path.dirname(status.compilerPath) : "", cortex || "", ...Object.values(configured).filter(path.isAbsolute).map(file => path.dirname(file))].filter(Boolean);
+    return (0, processTools_1.collectTools)({ configured, sources, directories: dirs, env: getExecutionEnv(status), trusted: vscode.workspace.isTrusted });
 }
-/** Copie les problèmes de l'onglet Problems qui appartiennent au projet détecté. */
+function isPathInside(candidate, root) {
+    return Boolean(candidate && root) && (0, filesystem_1.inside)(root, candidate);
+}
 function collectVsCodeProblems(projectRoot) {
     const severityLabels = {
         [vscode.DiagnosticSeverity.Error]: "Erreur",
@@ -716,12 +667,12 @@ async function collectGitSnapshot(projectRoot) {
     }
     const [head, status] = await Promise.all([
         runDiagnosticProcess("git", ["log", "-1", "--format=commit: %H%nsubject: %s%nauthor-date: %aI"], projectRoot),
-        runDiagnosticProcess("git", ["status", "--short", "--branch", "--untracked-files=normal", "--", "."], projectRoot)
+        runDiagnosticProcess("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--short", "--branch", "--untracked-files=normal", "--", "."], projectRoot)
     ]);
     return [
         head.stdout.trim() || "Commit indisponible.",
         "",
-        status.stdout.trim() || "Arbre de travail propre."
+        status.exitCode === 0 ? status.stdout.trim() || "Arbre de travail propre." : `État Git indisponible: ${status.stderr}`
     ].join("\n");
 }
 function artifactSnapshot(filePath) {
@@ -744,31 +695,39 @@ function artifactSnapshot(filePath) {
 // === TERMINAUX EXTERNES ET COMMANDE CMAKE ==================================
 /** Ouvre un vrai terminal VS Code pour le port série; la sortie n'est pas dans la Webview. */
 function openSerialTerminal(context) {
+    if (!vscode.workspace.isTrusted) {
+        void vscode.window.showWarningMessage("Approuve le workspace avant d'ouvrir un outil externe.");
+        return;
+    }
     const status = getQc1Status(context);
     if (!status.serialPort) {
         vscode.window.showErrorMessage("Aucun port série détecté. Configure qc1.serialPort puis réessaie.");
         return;
     }
-    const terminal = vscode.window.createTerminal({
-        name: "QC1 Serial",
-        env: getExecutionEnv(status)
-    });
+    let terminal;
     if (os.platform() === "win32") {
-        terminal.sendText(`mode ${quoteArg(status.serialPort)} BAUD=${status.baudRate} PARITY=n DATA=8 STOP=1 && type ${quoteArg(status.serialPort)}`);
+        if (!/^COM\d+$/i.test(status.serialPort) || !Number.isInteger(status.baudRate) || status.baudRate <= 0) {
+            void vscode.window.showErrorMessage("Port COM ou baud rate invalide.");
+            return;
+        }
+        terminal = vscode.window.createTerminal({ name: "QC1 Serial", shellPath: (0, processTools_1.resolveExecutable)("cmd.exe") || "cmd.exe", shellArgs: ["/d", "/c", `mode ${status.serialPort} BAUD=${status.baudRate} PARITY=n DATA=8 STOP=1 && type ${status.serialPort}`], env: getExecutionEnv(status) });
     }
     else {
         const screenPath = findExecutable("screen");
         if (!screenPath) {
             vscode.window.showErrorMessage("La commande screen est introuvable; installe-la ou utilise un moniteur série VS Code.");
-            terminal.dispose();
             return;
         }
-        terminal.sendText(`${quoteArg(screenPath)} ${quoteArg(status.serialPort)} ${status.baudRate}`);
+        terminal = vscode.window.createTerminal({ name: "QC1 Serial", shellPath: screenPath, shellArgs: [status.serialPort, String(status.baudRate)], env: getExecutionEnv(status) });
     }
     terminal.show();
 }
 /** Ouvre OpenOCD en mode serveur dans un terminal indépendant. */
 function startOpenOcdTerminal(context) {
+    if (!vscode.workspace.isTrusted) {
+        void vscode.window.showWarningMessage("Approuve le workspace avant d'ouvrir un outil externe.");
+        return;
+    }
     const status = getQc1Status(context);
     if (!status.openocdOk) {
         vscode.window.showErrorMessage("OpenOCD est introuvable. Configure qc1.openocdPath puis réessaie.");
@@ -776,9 +735,10 @@ function startOpenOcdTerminal(context) {
     }
     const terminal = vscode.window.createTerminal({
         name: "QC1 OpenOCD",
+        shellPath: status.openocdPath,
+        shellArgs: (0, hardware_1.getOpenOcdServerArgs)(),
         env: getExecutionEnv(status)
     });
-    terminal.sendText([quoteArg(status.openocdPath), ...(0, hardware_1.getOpenOcdServerArgs)().map(quoteArg)].join(" "));
     terminal.show();
 }
 function cmakeDefinition(name, value) {
@@ -793,18 +753,16 @@ function formatInvocation(executable, args) {
  * disponible pendant l'exécution et le ProgressManager peut lire chaque `[x/y]`.
  */
 function buildProcessInvocations(status, command) {
-    const config = vscode.workspace.getConfiguration("qc1");
+    const config = qc1Configuration();
     const buildType = config.get("buildType", "Debug");
     const configureArgs = [
         "-S", status.cmakeSourcePath,
         "-B", status.buildPath,
-        "-G", "Ninja",
-        cmakeDefinition("CMAKE_MAKE_PROGRAM", status.ninjaPath),
         cmakeDefinition("CMAKE_BUILD_TYPE", buildType)
     ];
     if (!status.nativeCmakeOk) {
         const toolchainPath = path.join(status.cmakeSourcePath, "arm-none-eabi-toolchain.cmake");
-        configureArgs.push(cmakeDefinition("CMAKE_TOOLCHAIN_FILE", toolchainPath), cmakeDefinition("QC1_PROJECT_ROOT", status.projectPath), cmakeDefinition("QC1_STARTUP", status.startupPath), cmakeDefinition("QC1_LINKER_SCRIPT", status.linkerScriptPath));
+        configureArgs.push("-G", "Ninja", cmakeDefinition("CMAKE_MAKE_PROGRAM", status.ninjaPath), cmakeDefinition("CMAKE_TOOLCHAIN_FILE", toolchainPath), cmakeDefinition("QC1_PROJECT_ROOT", status.projectPath), cmakeDefinition("QC1_STARTUP", status.startupPath), cmakeDefinition("QC1_LINKER_SCRIPT", status.linkerScriptPath), cmakeDefinition("QC1_SOURCE_DIR", status.sourcePath));
         if (status.compilerOk) {
             configureArgs.push(cmakeDefinition("QC1_ARM_GCC", status.compilerPath));
         }
@@ -827,7 +785,7 @@ function buildProcessInvocations(status, command) {
     if (["build", "rebuild", "tsmake", "flash", "run"].includes(command)) {
         invocations.push({
             phase: "building",
-            label: "Compilation Ninja",
+            label: "Compilation CMake",
             executable: status.cmakePath,
             args: buildArgs,
             tracksNinja: true
@@ -865,45 +823,11 @@ function buildProcessInvocations(status, command) {
 /** Lance un processus sans shell et retransmet stdout/stderr dès leur arrivée. */
 function runSpawnedProcess(invocation, cwd, env, onStdout, onStderr) {
     const command = formatInvocation(invocation.executable, invocation.args);
-    return new Promise((resolve) => {
-        let stdout = "";
-        let stderr = "";
-        let settled = false;
-        let timedOut = false;
-        const child = (0, child_process_1.spawn)(invocation.executable, invocation.args, { cwd, env, windowsHide: true });
-        const timer = setTimeout(() => {
-            timedOut = true;
-            child.kill();
-        }, 120000);
-        const finish = (exitCode, error) => {
-            if (settled)
-                return;
-            settled = true;
-            clearTimeout(timer);
-            resolve({ exitCode, stdout, stderr, command, error, timedOut });
-        };
-        child.stdout.on("data", (data) => {
-            const chunk = data.toString();
-            stdout += chunk;
-            onStdout(chunk);
-        });
-        child.stderr.on("data", (data) => {
-            const chunk = data.toString();
-            stderr += chunk;
-            onStderr(chunk);
-        });
-        child.on("error", (error) => finish(getExitCode(error), error));
-        child.on("close", (code, signal) => {
-            const error = code === 0 && !timedOut
-                ? undefined
-                : Object.assign(new Error(timedOut ? "Commande expirée" : `Processus terminé avec ${signal || `le code ${code}`}`), {
-                    code,
-                    killed: timedOut,
-                    signal: timedOut ? "SIGTERM" : signal
-                });
-            finish(code, error);
-        });
-    });
+    if (!vscode.workspace.isTrusted)
+        return Promise.resolve({ exitCode: null, stdout: "", stderr: "Workspace non approuvé", command, timedOut: false, error: new Error("Workspace non approuvé") });
+    return (0, processTools_1.runProcess)(invocation.executable, invocation.args, { cwd, env, timeoutMs: 120000, maxBytes: 512 * 1024, onStdout, onStderr }).then(result => ({
+        ...result, command, error: result.exitCode === 0 && !result.error ? undefined : Object.assign(new Error(result.error || result.stderr || "Processus échoué"), { code: result.exitCode, killed: result.timedOut })
+    }));
 }
 // === SYNCHRONISATION DE LA BARRE ET DU DASHBOARD ===========================
 /** Remplace le HTML complet par un nouveau rendu du `dashboardState`. */
@@ -982,6 +906,8 @@ class QC1PanelProvider {
     constructor(extensionUri, context) {
         this.extensionUri = extensionUri;
         this.context = context;
+        this.buildRunning = false;
+        this.reportRunning = false;
         this.outputLines = [];
     }
     /** Appelé par VS Code lorsque la barre latérale QC1 doit être créée. */
@@ -994,61 +920,73 @@ class QC1PanelProvider {
         };
         webviewView.webview.html = (0, dashboardHtml_1.getDashboardHtml)(dashboardState);
         // Routeur Webview -> extension. Chaque `msg.type` provient d'un postMessage du HTML.
-        webviewView.webview.onDidReceiveMessage(async (msg) => {
-            switch (msg.type) {
-                case "command":
-                    if (msg.command === "openLogs") {
-                        outputChannel?.show(true);
-                    }
-                    else {
+        webviewView.webview.onDidReceiveMessage(async (message) => {
+            if (!message || typeof message !== "object")
+                return;
+            const raw = message;
+            if (typeof raw.type !== "string")
+                return;
+            const msg = { type: raw.type, command: typeof raw.command === "string" ? raw.command : "" };
+            try {
+                switch (msg.type) {
+                    case "command":
+                        if (msg.command === "openLogs") {
+                            outputChannel?.show(true);
+                        }
+                        else {
+                            this.runCommand(msg.command);
+                        }
+                        break;
+                    case "run":
                         this.runCommand(msg.command);
+                        break;
+                    case "terminal":
+                        this.runCommand(msg.command);
+                        break;
+                    case "clear":
+                        this.clearOutput();
+                        break;
+                    case "copyOutput":
+                        await vscode.env.clipboard.writeText(this.outputLines.join("\n"));
+                        this.postStatus("Output copied", "success");
+                        break;
+                    case "saveLog":
+                        await this.saveLog();
+                        break;
+                    case "createDiagnosticReport":
+                        await this.createDiagnosticReport();
+                        break;
+                    case "settings":
+                        await vscode.commands.executeCommand("workbench.action.openSettings", "@ext:Mistral400.QC1-STM32-Tools");
+                        break;
+                    case "refreshSettings":
+                        this.sendSettings();
+                        break;
+                    case "refreshTools":
+                        this.sendToolsStatus();
+                        break;
+                    case "autoDetectPaths":
+                        await this.autoDetectPaths();
+                        break;
+                    case "copyDiagnostic":
+                        await vscode.env.clipboard.writeText(formatDiagnostic(getQc1Status(this.context)));
+                        this.postStatus("Diagnostic copied", "success");
+                        break;
+                    case "openExtensionFolder":
+                        await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(this.context.extensionPath));
+                        break;
+                    case "openProjectFolder": {
+                        const root = getQc1Status(this.context).projectPath || getWorkspaceRoot();
+                        if (root) {
+                            await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(root));
+                        }
+                        break;
                     }
-                    break;
-                case "run":
-                    this.runCommand(msg.command);
-                    break;
-                case "terminal":
-                    this.runCommand(msg.command);
-                    break;
-                case "clear":
-                    this.clearOutput();
-                    break;
-                case "copyOutput":
-                    await vscode.env.clipboard.writeText(this.outputLines.join("\n"));
-                    this.postStatus("Output copied", "success");
-                    break;
-                case "saveLog":
-                    await this.saveLog();
-                    break;
-                case "createDiagnosticReport":
-                    await this.createDiagnosticReport();
-                    break;
-                case "settings":
-                    vscode.commands.executeCommand("workbench.action.openSettings", "@ext:Mistral400.QC1-STM32-Tools");
-                    break;
-                case "refreshSettings":
-                    this.sendSettings();
-                    break;
-                case "refreshTools":
-                    this.sendToolsStatus();
-                    break;
-                case "autoDetectPaths":
-                    await this.autoDetectPaths();
-                    break;
-                case "copyDiagnostic":
-                    await vscode.env.clipboard.writeText(formatDiagnostic(getQc1Status(this.context)));
-                    this.postStatus("Diagnostic copied", "success");
-                    break;
-                case "openExtensionFolder":
-                    await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(this.context.extensionPath));
-                    break;
-                case "openProjectFolder": {
-                    const root = getQc1Status(this.context).projectPath || getWorkspaceRoot();
-                    if (root) {
-                        await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(root));
-                    }
-                    break;
                 }
+            }
+            catch (error) {
+                outputChannel?.appendLine(`[QC1] Action échouée: ${String(error)}`);
+                this.postStatus("Action QC1 échouée", "error");
             }
         });
         this.sendSettings();
@@ -1072,7 +1010,7 @@ class QC1PanelProvider {
     }
     /** Regroupe les réglages exposés à l'onglet Paramètres de la Webview. */
     getConfig() {
-        const config = vscode.workspace.getConfiguration("qc1");
+        const config = qc1Configuration();
         const status = getQc1Status(this.context);
         return {
             os: (0, dashboardState_1.getOsLabel)(process.platform),
@@ -1102,7 +1040,7 @@ class QC1PanelProvider {
     }
     /** Écrit les chemins auto-détectés dans les réglages du workspace. */
     async autoDetectPaths() {
-        const config = vscode.workspace.getConfiguration("qc1");
+        const config = qc1Configuration();
         const status = getQc1Status(this.context);
         const updates = [];
         updates.push(config.update("projectPath", status.projectOk ? status.projectPath : "", vscode.ConfigurationTarget.Workspace));
@@ -1140,168 +1078,211 @@ class QC1PanelProvider {
      * distincte de la barre colorée du Dashboard.
      */
     async createDiagnosticReport() {
-        const issueDescription = await vscode.window.showInputBox({
-            title: "Rapport de diagnostic QC1",
-            prompt: "Décris brièvement l'erreur et ce que tu faisais lorsqu'elle est apparue.",
-            placeHolder: "Exemple : le build échoue après avoir ajouté un nouveau fichier C (facultatif)",
-            ignoreFocusOut: true
-        });
-        if (issueDescription === undefined)
+        if (this.reportRunning)
             return;
+        this.reportRunning = true;
         try {
-            const report = await vscode.window.withProgress({
-                location: vscode.ProgressLocation.Notification,
-                title: "QC1 : collecte du contexte de diagnostic",
-                cancellable: false
-            }, async (progress) => {
-                progress.report({ message: "Projet, outils et problèmes VS Code" });
-                const status = getQc1Status(this.context);
-                const config = vscode.workspace.getConfiguration("qc1");
-                const workspaceFolders = vscode.workspace.workspaceFolders || [];
-                const projectRoot = status.projectPath || getWorkspaceRoot() || "";
-                const executionEnvironment = getExecutionEnv(status);
-                const probePromise = status.stlinkToolOk
-                    ? runDiagnosticProcess(status.stlinkPath, ["--probe"], projectRoot || undefined, executionEnvironment)
-                    : Promise.resolve({ exitCode: null, stdout: "", stderr: "st-info introuvable" });
-                const [tools, gitSnapshot, probe] = await Promise.all([
-                    collectDiagnosticToolReports(status),
-                    collectGitSnapshot(projectRoot),
-                    probePromise
-                ]);
-                progress.report({ message: "Création et anonymisation du rapport" });
-                const relevantExtension = (id) => {
-                    const extension = vscode.extensions.getExtension(id);
-                    return {
-                        id,
-                        installed: Boolean(extension),
-                        version: extension?.packageJSON?.version || "--",
-                        active: extension?.isActive || false
-                    };
-                };
-                const openDocuments = vscode.workspace.textDocuments
-                    .filter((document) => document.uri.scheme === "file" && (!projectRoot || isPathInside(document.uri.fsPath, projectRoot)))
-                    .slice(0, 30)
-                    .map((document) => ({ path: document.uri.fsPath, dirty: document.isDirty, language: document.languageId }));
-                const projectDiagnostics = getProjectDiagnostics(status);
-                const reportInput = {
-                    generatedAt: new Date().toISOString(),
-                    issueDescription,
-                    extension: {
-                        id: `${this.context.extension.packageJSON.publisher}.${this.context.extension.packageJSON.name}`,
-                        version: this.context.extension.packageJSON.version,
-                        dependencies: [
-                            relevantExtension("ms-vscode.cmake-tools"),
-                            relevantExtension("mylonics.embedded-build-tools")
-                        ]
-                    },
-                    runtime: {
-                        vscodeVersion: vscode.version,
-                        vscodeApp: vscode.env.appName,
-                        vscodeLanguage: vscode.env.language,
-                        remoteName: vscode.env.remoteName || "local",
-                        uiKind: vscode.env.uiKind === vscode.UIKind.Desktop ? "desktop" : "web",
-                        nodeVersion: process.version,
-                        platform: process.platform,
-                        architecture: process.arch,
-                        osRelease: os.release()
-                    },
-                    workspace: {
-                        folders: workspaceFolders.map((folder) => ({ name: folder.name, path: folder.uri.fsPath })),
-                        trusted: vscode.workspace.isTrusted,
-                        openDocuments
-                    },
-                    project: {
-                        path: status.projectPath || "--",
-                        name: status.projectName,
-                        layout: status.projectLayout,
-                        complete: status.projectComplete,
-                        cmakeMode: status.nativeCmakeOk ? "native" : status.bundledCmakeReady ? "QC1 intégré" : "introuvable",
-                        cmakeSourcePath: status.cmakeSourcePath,
-                        sourcePath: status.sourcePath,
-                        corePath: status.corePath,
-                        driversPath: status.driversPath,
-                        startupPath: status.startupPath,
-                        linkerScriptPath: status.linkerScriptPath,
-                        diagnostics: projectDiagnostics
-                    },
-                    configuration: {
-                        projectPath: config.get("projectPath", ""),
-                        buildDirectory: config.get("buildDirectory", "build/qc1"),
-                        buildType: config.get("buildType", "Debug"),
-                        cmakePath: config.get("cmakePath", ""),
-                        compilerPath: config.get("compilerPath", ""),
-                        openocdPath: config.get("openocdPath", ""),
-                        stlinkPath: config.get("stlinkPath", "st-info"),
-                        serialPort: config.get("serialPort", ""),
-                        baudRate: config.get("baudRate", 19200),
-                        autoDetectProject: config.get("autoDetectProject", true),
-                        autoClearOutput: config.get("autoClearOutput", false),
-                        showTimestamps: config.get("showTimestamps", true),
-                        outputMaxLines: config.get("outputMaxLines", 500)
-                    },
-                    dashboard: {
-                        currentAction: dashboardState.currentAction,
-                        lastCommand: dashboardState.lastCommand,
-                        diagnostic: dashboardState.diagnostic,
-                        progress: dashboardState.progress,
-                        build: dashboardState.build,
-                        flash: dashboardState.flash
-                    },
-                    artifacts: {
-                        buildDirectory: artifactSnapshot(status.buildPath),
-                        elf: artifactSnapshot(status.elfPath),
-                        bin: artifactSnapshot(status.binPath)
-                    },
-                    hardware: {
-                        serialPort: status.serialPort || "non configuré/détecté",
-                        baudRate: status.baudRate,
-                        previousStlinkState: status.stlinkProbeStatus,
-                        currentProbeExitCode: probe.exitCode,
-                        currentProbeOutput: `${probe.stdout}\n${probe.stderr}`.trim() || "--"
-                    },
-                    tools,
-                    vscodeProblems: collectVsCodeProblems(projectRoot),
-                    gitSnapshot,
-                    projectTree: collectProjectTree(projectRoot),
-                    logs: this.outputLines.slice(-1000).join("\n") || "Aucun journal QC1 disponible."
-                };
-                const redactions = [
-                    { value: status.projectPath, replacement: "<PROJECT>" },
-                    ...workspaceFolders.map((folder) => ({ value: folder.uri.fsPath, replacement: "<WORKSPACE>" })),
-                    { value: this.context.extensionPath, replacement: "<EXTENSION>" },
-                    { value: os.homedir(), replacement: "<HOME>" }
-                ];
-                return (0, diagnosticReport_1.buildDiagnosticReport)(reportInput, redactions);
+            const issueDescription = await vscode.window.showInputBox({
+                title: "Rapport de diagnostic QC1",
+                prompt: "Décris brièvement l'erreur et ce que tu faisais lorsqu'elle est apparue.",
+                placeHolder: "Exemple : le build échoue après avoir ajouté un nouveau fichier C (facultatif)",
+                ignoreFocusOut: true
             });
-            const preview = await vscode.workspace.openTextDocument({ content: report, language: "markdown" });
-            await vscode.window.showTextDocument(preview, { preview: true });
-            const action = await vscode.window.showInformationMessage("Rapport QC1 généré et prévisualisé. Vérifie-le avant de l'envoyer.", "Enregistrer le rapport", "Copier le rapport");
-            if (action === "Copier le rapport") {
-                await vscode.env.clipboard.writeText(report);
-                this.postStatus("Rapport copié", "success");
+            if (issueDescription === undefined)
                 return;
-            }
-            if (action === "Enregistrer le rapport") {
-                const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-                const defaultRoot = getQc1Status(this.context).projectPath || getWorkspaceRoot() || this.context.extensionPath;
-                const uri = await vscode.window.showSaveDialog({
-                    defaultUri: vscode.Uri.file(path.join(defaultRoot, `qc1-diagnostic-${timestamp}.md`)),
-                    filters: { Markdown: ["md"], Text: ["txt"] },
-                    saveLabel: "Enregistrer le rapport QC1"
+            try {
+                const report = await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: "QC1 : collecte du contexte de diagnostic",
+                    cancellable: false
+                }, async (progress) => {
+                    progress.report({ message: "Projet, outils et problèmes VS Code" });
+                    const status = getQc1Status(this.context);
+                    const config = qc1Configuration();
+                    const workspaceFolders = vscode.workspace.workspaceFolders || [];
+                    const projectRoot = status.projectPath || getWorkspaceRoot() || "";
+                    const executionEnvironment = getExecutionEnv(status);
+                    const collectionErrors = [];
+                    const collect = async (name, task, fallback) => {
+                        try {
+                            return await task();
+                        }
+                        catch (error) {
+                            collectionErrors.push(`${name}: ${String(error)}`);
+                            return fallback;
+                        }
+                    };
+                    const probePromise = status.stlinkToolOk
+                        ? runDiagnosticProcess(status.stlinkPath, ["--probe"], projectRoot || undefined, executionEnvironment)
+                        : Promise.resolve({ exitCode: null, stdout: "", stderr: "st-info introuvable" });
+                    const [tools, gitSnapshot, probe, system, devices] = await Promise.all([
+                        collect("tools", () => collectDiagnosticToolReports(status), []),
+                        collect("git", () => collectGitSnapshot(projectRoot), "unknown"),
+                        probePromise,
+                        collect("system", () => (0, systemInspection_1.inspectSystem)(), { status: "unknown" }),
+                        collect("devices", () => (0, systemInspection_1.inspectDevices)(vscode.workspace.isTrusted), { usb: [], serial: [], permissions: {}, errors: ["Collection unavailable"] })
+                    ]);
+                    progress.report({ message: "Création et anonymisation du rapport" });
+                    const relevantExtension = (id) => {
+                        const extension = vscode.extensions.getExtension(id);
+                        return {
+                            id,
+                            installed: Boolean(extension),
+                            version: extension?.packageJSON?.version || "--",
+                            active: extension?.isActive || false
+                        };
+                    };
+                    const openDocuments = vscode.workspace.textDocuments
+                        .filter((document) => document.uri.scheme === "file" && (!projectRoot || isPathInside(document.uri.fsPath, projectRoot)))
+                        .slice(0, 30)
+                        .map((document) => ({ path: document.uri.fsPath, dirty: document.isDirty, language: document.languageId }));
+                    const projectDiagnostics = getProjectDiagnostics(status);
+                    const details = (0, projectDiagnostics_1.inspectProjectDetails)((0, projectDiscovery_1.inspectStm32Project)(projectRoot, status.buildPath), config.get("targetMcu", ""), status.buildPath);
+                    const installedExtensions = (0, extensionInventory_1.completeExtensionInventory)(vscode.extensions.all.map(extension => ({
+                        id: extension.id, name: String(extension.packageJSON.displayName || extension.packageJSON.name || extension.id),
+                        version: String(extension.packageJSON.version || "unknown"), active: extension.isActive,
+                        enabled: "unknown (public API lists visible extensions, not disabled inventory)",
+                        kind: (0, filesystem_1.inside)(vscode.env.appRoot, extension.extensionPath) ? "system" : "user",
+                        path: extension.extensionPath, relevant: /cmake|cortex|embedded|platformio|stm32|clang|cpptools|serial|gitlens|arm|openocd|stlink/i.test(extension.id)
+                    })));
+                    const reportInput = {
+                        system, installedExtensions, devices,
+                        structure: details.structure, mcu: details.mcu, cmake: details.cmake,
+                        findings: [...collectionErrors.map(message => ({ code: "QC1-COLLECT-001", level: "warning", category: "environment", title: "COLLECTION_FAILED", message, cause: message, evidence: message, path: "", suggestion: "Vérifier l'accès aux outils et fichiers.", correction: "Relancer le rapport après correction." })), ...details.findings, ...projectDiagnostics.map(d => ({
+                                code: d.code, level: d.level === "error" ? "error" : "warning", category: "project", title: d.title,
+                                message: d.message, cause: d.cause, evidence: d.checkedPath, path: d.checkedPath,
+                                suggestion: "Vérifier le projet et les références CMake.", correction: "Corriger la configuration après vérification."
+                            })), ...tools.filter(t => t.detected && t.exitCode !== 0).map(t => ({
+                                code: "QC1-TOOL-010", level: "warning", category: "toolchain", title: "TOOL_PROBE_FAILED",
+                                message: `${t.name}: test de version échoué ou non exécuté`, cause: t.stderr || "unknown", evidence: t.probeStatus || "unknown",
+                                path: t.path, suggestion: "Vérifier architecture, permissions et chemin de l'outil.", correction: "Configurer qc1.toolPaths."
+                            }))],
+                        generatedAt: new Date().toISOString(),
+                        issueDescription,
+                        extension: {
+                            id: `${this.context.extension.packageJSON.publisher}.${this.context.extension.packageJSON.name}`,
+                            version: this.context.extension.packageJSON.version,
+                            dependencies: [
+                                relevantExtension("ms-vscode.cmake-tools"),
+                                relevantExtension("mylonics.embedded-build-tools")
+                            ]
+                        },
+                        runtime: {
+                            vscodeVersion: vscode.version,
+                            vscodeCommit: "unknown (not exposed by public API)",
+                            vscodeBuild: vscode.env.appName,
+                            vscodeApp: vscode.env.appName,
+                            vscodeLanguage: vscode.env.language,
+                            remoteName: vscode.env.remoteName || "local",
+                            uiKind: vscode.env.uiKind === vscode.UIKind.Desktop ? "desktop" : "web",
+                            nodeVersion: process.version,
+                            platform: process.platform,
+                            architecture: process.arch,
+                            osRelease: os.release()
+                        },
+                        workspace: {
+                            folders: workspaceFolders.map((folder) => ({ name: folder.name, path: folder.uri.fsPath })),
+                            trusted: vscode.workspace.isTrusted,
+                            openDocuments
+                        },
+                        project: {
+                            path: status.projectPath || "--",
+                            name: status.projectName,
+                            layout: status.projectLayout,
+                            complete: status.projectComplete,
+                            cmakeMode: status.nativeCmakeOk ? "native" : status.bundledCmakeReady ? "QC1 intégré" : "introuvable",
+                            cmakeSourcePath: status.cmakeSourcePath,
+                            sourcePath: status.sourcePath,
+                            corePath: status.corePath,
+                            driversPath: status.driversPath,
+                            startupPath: status.startupPath,
+                            linkerScriptPath: status.linkerScriptPath,
+                            diagnostics: projectDiagnostics
+                        },
+                        configuration: {
+                            projectPath: config.get("projectPath", ""),
+                            buildDirectory: config.get("buildDirectory", "build/qc1"),
+                            buildType: config.get("buildType", "Debug"),
+                            cmakePath: config.get("cmakePath", ""),
+                            compilerPath: config.get("compilerPath", ""),
+                            openocdPath: config.get("openocdPath", ""),
+                            stlinkPath: config.get("stlinkPath", "st-info"),
+                            serialPort: config.get("serialPort", ""),
+                            baudRate: config.get("baudRate", 19200),
+                            autoDetectProject: config.get("autoDetectProject", true),
+                            autoClearOutput: config.get("autoClearOutput", false),
+                            showTimestamps: config.get("showTimestamps", true),
+                            outputMaxLines: config.get("outputMaxLines", 500)
+                        },
+                        dashboard: {
+                            currentAction: dashboardState.currentAction,
+                            lastCommand: dashboardState.lastCommand,
+                            diagnostic: dashboardState.diagnostic,
+                            progress: dashboardState.progress,
+                            build: dashboardState.build,
+                            flash: dashboardState.flash
+                        },
+                        artifacts: {
+                            buildDirectory: artifactSnapshot(status.buildPath),
+                            elf: artifactSnapshot(status.elfPath),
+                            bin: artifactSnapshot(status.binPath)
+                        },
+                        hardware: {
+                            serialPort: status.serialPort || "non configuré/détecté",
+                            baudRate: status.baudRate,
+                            previousStlinkState: status.stlinkProbeStatus,
+                            currentProbeExitCode: probe.exitCode,
+                            currentProbeOutput: `${probe.stdout}\n${probe.stderr}`.trim() || "--"
+                        },
+                        tools,
+                        vscodeProblems: collectVsCodeProblems(projectRoot),
+                        gitSnapshot,
+                        projectTree: details.tree,
+                        logs: this.outputLines.slice(-1000).join("\n") || "Aucun journal QC1 disponible."
+                    };
+                    const redactions = [
+                        { value: status.projectPath, replacement: "<PROJECT>" },
+                        ...workspaceFolders.map((folder) => ({ value: folder.uri.fsPath, replacement: "<WORKSPACE>" })),
+                        { value: this.context.extensionPath, replacement: "<EXTENSION>" },
+                        { value: os.homedir(), replacement: "<HOME>" },
+                        { value: os.hostname(), replacement: "<HOSTNAME>" },
+                        ...installedExtensions.map(extension => ({ value: String(extension.path || ""), replacement: `<EXTENSION:${String(extension.id)}>` }))
+                    ];
+                    return (0, diagnosticReport_1.buildDiagnosticReport)(reportInput, redactions);
                 });
-                if (uri) {
-                    await vscode.workspace.fs.writeFile(uri, Buffer.from(report, "utf8"));
-                    const savedDocument = await vscode.workspace.openTextDocument(uri);
-                    await vscode.window.showTextDocument(savedDocument, { preview: false });
-                    this.postStatus("Rapport enregistré", "success");
+                const preview = await vscode.workspace.openTextDocument({ content: report, language: "markdown" });
+                await vscode.window.showTextDocument(preview, { preview: true });
+                const action = await vscode.window.showInformationMessage("Rapport QC1 généré et prévisualisé. Vérifie-le avant de l'envoyer.", "Enregistrer le rapport", "Copier le rapport");
+                if (action === "Copier le rapport") {
+                    await vscode.env.clipboard.writeText(report);
+                    this.postStatus("Rapport copié", "success");
+                    return;
+                }
+                if (action === "Enregistrer le rapport") {
+                    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+                    const defaultRoot = getQc1Status(this.context).projectPath || getWorkspaceRoot() || this.context.extensionPath;
+                    const uri = await vscode.window.showSaveDialog({
+                        defaultUri: vscode.Uri.file(path.join(defaultRoot, `qc1-diagnostic-${timestamp}.md`)),
+                        filters: { Markdown: ["md"], Text: ["txt"] },
+                        saveLabel: "Enregistrer le rapport QC1"
+                    });
+                    if (uri) {
+                        await vscode.workspace.fs.writeFile(uri, Buffer.from(report, "utf8"));
+                        const savedDocument = await vscode.workspace.openTextDocument(uri);
+                        await vscode.window.showTextDocument(savedDocument, { preview: false });
+                        this.postStatus("Rapport enregistré", "success");
+                    }
                 }
             }
+            catch (error) {
+                const message = `Impossible de générer le rapport QC1 : ${error.message}`;
+                outputChannel?.appendLine(`[QC1] ${message}`);
+                vscode.window.showErrorMessage(message);
+                this.postStatus("Échec du rapport", "error");
+            }
         }
-        catch (error) {
-            const message = `Impossible de générer le rapport QC1 : ${error.message}`;
-            outputChannel?.appendLine(`[QC1] ${message}`);
-            vscode.window.showErrorMessage(message);
-            this.postStatus("Échec du rapport", "error");
+        finally {
+            this.reportRunning = false;
         }
     }
     /**
@@ -1329,7 +1310,15 @@ class QC1PanelProvider {
             openSerialTerminal(this.context);
             return;
         }
-        void this.runQC1(command);
+        if (this.buildRunning) {
+            this.postStatus("Une opération QC1 est déjà en cours", "running");
+            return;
+        }
+        this.buildRunning = true;
+        void this.runQC1(command).catch(error => {
+            this.appendOutput(error instanceof Error ? error.message : String(error), "error");
+            this.postStatus("Opération QC1 échouée", "error");
+        }).finally(() => { this.buildRunning = false; });
     }
     detectStlink() {
         this.runStatus("detect-stlink");
@@ -1357,7 +1346,7 @@ class QC1PanelProvider {
         const finish = (probeOutput, probeError) => {
             if (status.stlinkToolOk) {
                 const detected = (0, hardware_1.readStlinkProbeStatus)(probeOutput);
-                stlinkProbeStatus = detected === "non testé" && probeError ? "non détecté" : detected;
+                stlinkProbeStatus = detected;
             }
             syncDashboardState(this.context);
             this.appendOutput(formatDiagnostic(getQc1Status(this.context)), "stdout");
@@ -1383,18 +1372,18 @@ class QC1PanelProvider {
             finish("");
             return;
         }
-        (0, child_process_1.execFile)(status.stlinkPath, ["--probe"], {
-            cwd: status.projectPath || getWorkspaceRoot(),
-            env: getExecutionEnv(status),
-            encoding: "utf8",
-            timeout: 15000
-        }, (error, stdout, stderr) => finish(`${stdout || ""}\n${stderr || ""}`, error || undefined));
+        void runDiagnosticProcess(status.stlinkPath, ["--probe"], status.projectPath || getWorkspaceRoot(), getExecutionEnv(status))
+            .then(result => finish(`${result.stdout}\n${result.stderr}`, result.exitCode === 0 ? undefined : new Error(result.stderr)));
     }
     /**
      * Pipeline principal Build/Clean/Flash/Run.
      * Chaque étape est lancée séparément; le build transmet stdout au ProgressManager.
      */
     async runQC1(command) {
+        if (!vscode.workspace.isTrusted) {
+            this.postStatus("Workspace non approuvé", "error");
+            return;
+        }
         const root = getWorkspaceRoot();
         const config = this.getConfig();
         const toolStatus = getQc1Status(this.context);
@@ -1469,21 +1458,47 @@ class QC1PanelProvider {
         const environment = getExecutionEnv(toolStatus);
         const stdoutParts = [];
         const stderrParts = [];
+        const appendBounded = (parts, chunk) => {
+            parts.push(chunk.slice(-128 * 1024));
+            while (parts.length > 128)
+                parts.shift();
+        };
         const executedCommands = [];
         let failedResult;
         try {
+            if (toolStatus.nativeCmakeOk) {
+                const query = path.join(toolStatus.buildPath, ".cmake", "api", "v1", "query", "client-qc1");
+                await fs.promises.mkdir(query, { recursive: true });
+                for (const name of ["codemodel-v2", "toolchains-v1"]) {
+                    try {
+                        await fs.promises.writeFile(path.join(query, name), "", { flag: "wx" });
+                    }
+                    catch (error) {
+                        if (error.code !== "EEXIST")
+                            throw error;
+                    }
+                }
+            }
             for (const invocation of invocations) {
+                if (invocation.phase === "flashing") {
+                    const refreshed = getQc1Status(this.context);
+                    if (!fileExists(refreshed.elfPath))
+                        throw new Error("ELF introuvable: vérifier la cible CMake ou configurer qc1.elfPath.");
+                    invocation.args = invocation.executable === toolStatus.openocdPath
+                        ? (0, hardware_1.getOpenOcdProgramArgs)(refreshed.elfPath)
+                        : invocation.args.map(arg => arg === toolStatus.elfPath ? refreshed.elfPath : arg);
+                }
                 progressManager.setPhase(invocation.phase, invocation.label);
                 const displayedInvocation = formatInvocation(invocation.executable, invocation.args);
                 executedCommands.push(displayedInvocation);
                 this.appendOutput(`$ ${displayedInvocation}`, "command");
                 const result = await runSpawnedProcess(invocation, projectDir, environment, (chunk) => {
-                    stdoutParts.push(chunk);
+                    appendBounded(stdoutParts, chunk);
                     if (invocation.tracksNinja)
                         progressManager.consumeOutput(chunk);
                     this.appendOutput(chunk, "stdout");
                 }, (chunk) => {
-                    stderrParts.push(chunk);
+                    appendBounded(stderrParts, chunk);
                     if (invocation.tracksNinja)
                         progressManager.consumeOutput(chunk);
                     this.appendOutput(chunk, "stderr");
@@ -1693,19 +1708,21 @@ class QC1PanelProvider {
      * puis message `output` vers la Webview. Modifier ici pour filtrer/formater les logs.
      */
     appendOutput(text, kind = "stdout") {
-        const config = this.getConfig();
-        const timestamp = config.showTimestamps
+        // Logging must not trigger a project scan for every compiler output chunk.
+        const config = qc1Configuration();
+        const timestamp = config.get("showTimestamps", true)
             ? `[${new Date().toLocaleTimeString()}] `
             : "";
-        const lines = text
+        const lines = text.slice(-128 * 1024)
             .toString()
             .split(/\r\n|\n|\r/)
-            .filter((line) => line.length > 0)
+            .filter((line) => line.length > 0).slice(-2000)
             .map((line) => `${timestamp}${line}`);
         this.outputLines.push(...lines);
         outputChannel?.appendLine(lines.join("\n"));
-        if (this.outputLines.length > config.outputMaxLines) {
-            this.outputLines = this.outputLines.slice(-config.outputMaxLines);
+        const limit = Math.min(5000, Math.max(1, Number(config.get("outputMaxLines", 500)) || 500));
+        if (this.outputLines.length > limit) {
+            this.outputLines = this.outputLines.slice(-limit);
         }
         this.view?.webview.postMessage({
             type: "output",
@@ -1778,6 +1795,7 @@ class QC1PanelProvider {
         });
     }
 }
+exports.QC1PanelProvider = QC1PanelProvider;
 QC1PanelProvider.viewType = "qc1.panel";
 // === POINT D'ENTRÉE DE L'EXTENSION =========================================
 /**
@@ -1788,13 +1806,11 @@ QC1PanelProvider.viewType = "qc1.panel";
 async function activate(context) {
     outputChannel = vscode.window.createOutputChannel("QC1 STM32 Tools");
     context.subscriptions.push(outputChannel);
-    await initializeEmbeddedBuildTools();
+    // Tool installation may take a long time; keep the views and commands responsive.
+    void initializeEmbeddedBuildTools().then(() => { syncDashboardState(context); refreshDashboard(); }).catch(error => outputChannel?.appendLine(String(error)));
     syncDashboardState(context);
     const provider = new QC1PanelProvider(context.extensionUri, context);
-    const aiProvider = new aiPanel_1.LiixAiPanelProvider(context.extensionUri);
-    context.subscriptions.push(aiProvider);
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(QC1PanelProvider.viewType, provider));
-    context.subscriptions.push(vscode.window.registerWebviewViewProvider(aiPanel_1.LiixAiPanelProvider.viewType, aiProvider));
     // Les identifiants doivent rester identiques à `contributes.commands` dans package.json.
     context.subscriptions.push(vscode.commands.registerCommand("qc1.build", () => {
         provider.runCommand("build");
@@ -1846,33 +1862,6 @@ async function activate(context) {
     }));
     context.subscriptions.push(vscode.commands.registerCommand("qc1.openSettings", () => {
         vscode.commands.executeCommand("workbench.action.openSettings", "@ext:Mistral400.QC1-STM32-Tools");
-    }));
-    // Commandes Liix disponibles depuis la palette, sans dépendre des slash commands.
-    const openLiix = async () => {
-        await vscode.commands.executeCommand("workbench.view.extension.liix-ai");
-    };
-    context.subscriptions.push(vscode.commands.registerCommand("liix.newChat", async () => {
-        await openLiix();
-        aiProvider.newChat();
-    }));
-    context.subscriptions.push(vscode.commands.registerCommand("liix.explainActiveFile", async () => {
-        await openLiix();
-        aiProvider.requestPrompt("Explique le fichier actif, son rôle, ses points importants et les risques éventuels.", "chat");
-    }));
-    context.subscriptions.push(vscode.commands.registerCommand("liix.fixDiagnostics", async () => {
-        await openLiix();
-        aiProvider.requestPrompt("Inspecte les diagnostics VS Code, corrige les erreurs pertinentes puis vérifie le résultat.", "agent");
-    }));
-    context.subscriptions.push(vscode.commands.registerCommand("liix.openTerminal", async () => {
-        await openLiix();
-        aiProvider.showPage("terminal");
-    }));
-    context.subscriptions.push(vscode.commands.registerCommand("liix.stopAgent", () => aiProvider.stop()));
-    context.subscriptions.push(vscode.commands.registerCommand("liix.undoLastEdit", () => void aiProvider.undoLastEdit()));
-    context.subscriptions.push(vscode.commands.registerCommand("liix.openLastDiff", () => void aiProvider.openLastDiff()));
-    context.subscriptions.push(vscode.commands.registerCommand("liix.refreshLocalModels", async () => {
-        await openLiix();
-        await aiProvider.refreshModels();
     }));
 }
 // Les ressources enregistrées dans `context.subscriptions` sont libérées par VS Code.

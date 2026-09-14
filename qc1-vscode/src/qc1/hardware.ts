@@ -2,6 +2,7 @@ export type StlinkProbeStatus = "OK" | "non détecté" | "non testé";
 
 export function readStlinkProbeStatus(output: string): StlinkProbeStatus {
   const lower = output.toLowerCase();
+  if (/permission denied|access denied|libusb.*(?:error|access)|failed|error|cannot open/.test(lower)) return "non testé";
 
   if (
     lower.includes("found 0 stlink") ||
@@ -16,9 +17,6 @@ export function readStlinkProbeStatus(output: string): StlinkProbeStatus {
 
   if (
     /found\s+[1-9]\d*\s+stlink/.test(lower) ||
-    lower.includes("st-link") ||
-    lower.includes("stlink") ||
-    lower.includes("target voltage") ||
     lower.includes("device connected")
   ) {
     return "OK";
@@ -32,7 +30,10 @@ export function getOpenOcdServerArgs(): string[] {
 }
 
 export function getOpenOcdProgramArgs(elfPath: string): string[] {
-  return [...getOpenOcdServerArgs(), "-c", `program {${elfPath}} verify reset exit`];
+  // Tcl has its own quoting rules even when spawn(shell:false) is used.
+  const normalized = elfPath.replace(/\\/g, "/");
+  if (/[{}\r\n\u0000]/.test(normalized)) throw new Error("Chemin ELF non représentable dans la commande Tcl OpenOCD.");
+  return [...getOpenOcdServerArgs(), "-c", `program {${normalized}} verify reset exit`];
 }
 
 export function getStFlashWriteArgs(binPath: string): string[] {

@@ -1,8 +1,25 @@
+/** Project discovery independent of CubeMX naming; evidence shared with diagnostics. */
 import * as fs from "fs";
 import * as path from "path";
+import { inspectCmake, CmakeInspection, parseCmake } from "./cmakeInspection";
+import {
+  finding,
+  Finding,
+  readText,
+  resolveUserPath,
+  scanProject,
+  ProjectScan,
+  inside,
+} from "./filesystem";
 
-export type Qc1ProjectLayout = "native-cmake" | "cubemx" | "bare-metal" | "unknown";
-
+export type Qc1ProjectLayout =
+  | "native-cmake"
+  | "cubemx"
+  | "bare-metal"
+  | "makefile"
+  | "platformio"
+  | "stm32cubeide"
+  | "unknown";
 export interface Qc1ProjectInspection {
   root: string;
   layout: Qc1ProjectLayout;
@@ -15,192 +32,194 @@ export interface Qc1ProjectInspection {
   linkerScriptPath: string;
   projectName: string;
   score: number;
+  sources: string[];
+  startupCandidates: string[];
+  linkerCandidates: string[];
+  markers: string[];
+  cmake: CmakeInspection;
+  scan: ProjectScan;
+  findings: Finding[];
 }
-
-const ignoredDirectories = new Set([
-  ".git",
-  ".vscode",
-  "backups",
-  "build",
-  "dist",
-  "node_modules",
-  "out",
-  "__pycache__"
-]);
-
-function exists(candidate: string): boolean {
-  try {
-    return fs.existsSync(candidate);
-  } catch {
-    return false;
-  }
+export function readCmakeProjectName(file: string): string {
+  return (
+    parseCmake(readText(file)).commands.find((c) => c.name === "project")
+      ?.args[0] || "firmware"
+  );
 }
-
-function collectProjectFiles(root: string, pattern: RegExp, maxDepth = 8): string[] {
-  const matches: string[] = [];
-
-  function walk(current: string, depth: number): void {
-    if (depth > maxDepth) return;
-
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    entries.sort((left, right) => left.name.localeCompare(right.name));
-    for (const entry of entries) {
-      if (entry.isFile() && pattern.test(entry.name)) {
-        matches.push(path.join(current, entry.name));
-      }
-    }
-
-    for (const entry of entries) {
-      if (!entry.isDirectory() || ignoredDirectories.has(entry.name)) continue;
-      walk(path.join(current, entry.name), depth + 1);
-    }
-  }
-
-  walk(root, 0);
-  return matches;
-}
-
-function chooseLinkerScript(root: string, candidates: string[]): string {
-  return [...candidates].sort((left, right) => {
-    const score = (candidate: string): number => {
-      const name = path.basename(candidate).toLowerCase();
-      const relative = path.relative(root, candidate);
-      let value = path.dirname(relative) === "." ? 100 : 0;
-      if (name.includes("stm32f103")) value += 40;
-      if (name.includes("flash")) value += 20;
-      return value;
-    };
-
-    return score(right) - score(left) || left.localeCompare(right);
-  })[0] || "";
-}
-
-export function readCmakeProjectName(cmakePath: string): string {
-  if (!cmakePath || !exists(cmakePath)) return "firmware";
-
-  try {
-    const source = fs.readFileSync(cmakePath, "utf8");
-    const match = source.match(/\bproject\s*\(\s*([^\s)]+)/i);
-    return match?.[1]?.replace(/["']/g, "") || "firmware";
-  } catch {
-    return "firmware";
-  }
-}
-
-export function inspectStm32Project(root: string): Qc1ProjectInspection {
-  if (!root) {
-    return {
-      root: "",
-      layout: "unknown",
-      nativeCmakePath: "",
-      corePath: "",
-      driversPath: "",
-      srcPath: "",
-      incPath: "",
-      startupPath: "",
-      linkerScriptPath: "",
-      projectName: "firmware",
-      score: 0
-    };
-  }
-
-  const nativeCmakePath = path.join(root, "CMakeLists.txt");
-  const corePath = path.join(root, "Core");
-  const driversPath = path.join(root, "Drivers");
-  const srcPath = exists(path.join(root, "Src")) ? path.join(root, "Src") : path.join(corePath, "Src");
-  const incPath = exists(path.join(root, "Inc")) ? path.join(root, "Inc") : path.join(corePath, "Inc");
-  const startupPath = collectProjectFiles(root, /^startup_stm32f103.*\.[sS]$/i)[0] || "";
-  const linkerScriptPath = chooseLinkerScript(root, collectProjectFiles(root, /\.ld$/i));
-
-  const hasNativeCmake = exists(nativeCmakePath);
-  const hasCore = exists(corePath);
-  const hasDrivers = exists(driversPath);
-  const hasSources = exists(srcPath);
-  const hasStartup = Boolean(startupPath);
-  const hasLinker = Boolean(linkerScriptPath);
-  const layout: Qc1ProjectLayout = hasNativeCmake
-    ? "native-cmake"
-    : hasCore
-      ? "cubemx"
-      : hasSources
-        ? "bare-metal"
-        : "unknown";
-  const score =
-    (hasNativeCmake ? 100 : 0) +
-    (hasSources ? 40 : 0) +
-    (hasStartup ? 30 : 0) +
-    (hasLinker ? 20 : 0) +
-    (hasCore ? 10 : 0) +
-    (hasDrivers ? 5 : 0);
-
+export function inspectStm32Project(
+  root: string,
+  buildDirectory?: string,
+): Qc1ProjectInspection {
+  const scan = root
+    ? scanProject(root)
+    : { files: [], directories: 0, bytes: 0, truncated: false, findings: [] };
+  const files = scan.files;
+  const cmake = inspectCmake(root, files, buildDirectory);
+  const nativeCmakePath =
+    root && files.includes(path.join(root, "CMakeLists.txt"))
+      ? path.join(root, "CMakeLists.txt")
+      : "";
+  const sourceFiles = files.filter((f) => /\.(c|cc|cxx|cpp)$/i.test(f));
+  const sources = [
+    ...new Set([
+      ...cmake.sources.filter(
+        (f) => /\.(c|cc|cxx|cpp)$/i.test(f) && fs.existsSync(f),
+      ),
+      ...sourceFiles,
+    ]),
+  ];
+  const assembly = cmake.sources.filter(
+    (f) => /\.(s|asm)$/i.test(f) && fs.existsSync(f),
+  );
+  const startupCandidates = [
+    ...new Set([
+      ...assembly.filter((f) =>
+        /^startup(?:_.*)?\.(s|asm)$/i.test(path.basename(f)),
+      ),
+      ...files.filter((f) =>
+        /^startup(?:_.*)?\.(s|asm)$/i.test(path.basename(f)),
+      ),
+    ]),
+  ];
+  for (const file of assembly)
+    if (
+      !startupCandidates.includes(file) &&
+      /\b(?:Reset_Handler|__Vectors|g_pfnVectors|isr_vector)\b/.test(
+        readText(file, 128 * 1024),
+      )
+    )
+      startupCandidates.unshift(file);
+  const linkerCandidates = [
+    ...new Set([
+      ...cmake.linkerScripts.filter((f) => fs.existsSync(f)),
+      ...files.filter((f) => /\.ld$/i.test(f)),
+    ]),
+  ];
+  const referencedStartup = startupCandidates.filter((f) =>
+    cmake.sources.includes(f),
+  );
+  const referencedLinker = linkerCandidates.filter((f) =>
+    cmake.linkerScripts.includes(f),
+  );
+  const pick = (referenced: string[], all: string[]): string =>
+    referenced.length === 1 ? referenced[0] : all.length === 1 ? all[0] : "";
+  const markers = files.filter(
+    (f) =>
+      path.dirname(f) === root &&
+      /(?:\.ioc$|^\.cproject$|^\.project$|^platformio\.ini$|^Makefile$|^CMakeLists\.txt$)/i.test(
+        path.basename(f),
+      ),
+  );
+  const has = (pattern: RegExp): boolean =>
+    markers.some((f) => pattern.test(path.basename(f)));
+  const layout: Qc1ProjectLayout = has(/^platformio\.ini$/i)
+    ? "platformio"
+    : nativeCmakePath
+      ? "native-cmake"
+      : has(/^\.cproject$/)
+        ? "stm32cubeide"
+        : has(/\.ioc$/i)
+          ? "cubemx"
+          : has(/^makefile$/i)
+            ? "makefile"
+            : sources.length
+              ? fs.existsSync(path.join(root, "Core"))
+                ? "cubemx"
+                : "bare-metal"
+              : "unknown";
+  const findings = [...scan.findings, ...cmake.findings];
+  if (startupCandidates.length > 1 && referencedStartup.length !== 1)
+    findings.push(
+      finding(
+        "QC1-PRJ-006",
+        "STARTUP_AMBIGUOUS",
+        "Plusieurs startups: aucune sélection automatique sûre.",
+        root,
+      ),
+    );
+  if (linkerCandidates.length > 1 && referencedLinker.length !== 1)
+    findings.push(
+      finding(
+        "QC1-PRJ-007",
+        "LINKER_AMBIGUOUS",
+        "Plusieurs scripts linker: utiliser la référence CMake explicite.",
+        root,
+      ),
+    );
+  const header = files.find((f) => /\.h$/i.test(f));
   return {
     root,
     layout,
-    nativeCmakePath: hasNativeCmake ? nativeCmakePath : "",
-    corePath,
-    driversPath,
-    srcPath,
-    incPath,
-    startupPath,
-    linkerScriptPath,
-    projectName: readCmakeProjectName(hasNativeCmake ? nativeCmakePath : ""),
-    score
+    nativeCmakePath,
+    corePath: root ? path.join(root, "Core") : "",
+    driversPath: root ? path.join(root, "Drivers") : "",
+    srcPath: sources[0] ? path.dirname(sources[0]) : "",
+    incPath: header ? path.dirname(header) : "",
+    startupPath: pick(referencedStartup, startupCandidates),
+    linkerScriptPath: pick(referencedLinker, linkerCandidates),
+    projectName: cmake.executableTargets[0] || cmake.projectName,
+    sources,
+    startupCandidates,
+    linkerCandidates,
+    markers,
+    cmake,
+    scan,
+    findings,
+    score:
+      (nativeCmakePath ? 100 : 0) +
+      (sources.length ? 40 : 0) +
+      (startupCandidates.length ? 30 : 0) +
+      (linkerCandidates.length ? 20 : 0) +
+      (markers.length ? 10 : 0),
   };
 }
-
-export function isUsableStm32Project(inspection: Qc1ProjectInspection): boolean {
-  return inspection.layout !== "unknown" &&
-    Boolean(inspection.startupPath) &&
-    Boolean(inspection.linkerScriptPath) &&
-    exists(inspection.srcPath);
+export function isUsableStm32Project(
+  inspection: Qc1ProjectInspection,
+): boolean {
+  if (inspection.nativeCmakePath) return true;
+  return (
+    inspection.layout !== "unknown" &&
+    Boolean(
+      inspection.startupPath &&
+      inspection.linkerScriptPath &&
+      inspection.srcPath,
+    )
+  );
 }
-
-export function findStm32Project(root: string, maxDepth = 8): Qc1ProjectInspection | null {
-  const candidates: Qc1ProjectInspection[] = [];
-
-  function walk(current: string, depth: number): void {
-    if (depth > maxDepth) return;
-
-    const hasProjectMarker = exists(path.join(current, "CMakeLists.txt")) ||
-      exists(path.join(current, "Src")) ||
-      exists(path.join(current, "Core"));
-    if (hasProjectMarker) {
-      const inspection = inspectStm32Project(current);
-      if (isUsableStm32Project(inspection)) {
-        candidates.push(inspection);
-        return;
-      }
-    }
-
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    entries.sort((left, right) => left.name.localeCompare(right.name));
-    for (const entry of entries) {
-      if (!entry.isDirectory() || ignoredDirectories.has(entry.name)) continue;
-      walk(path.join(current, entry.name), depth + 1);
-    }
+export function findStm32Project(
+  root: string,
+  maxDepth = 8,
+): Qc1ProjectInspection | null {
+  const scan = scanProject(root, maxDepth, 6000);
+  const markers = scan.files.filter(
+    (f) =>
+      /^(CMakeLists\.txt|Makefile|platformio\.ini|\.cproject)$/.test(
+        path.basename(f),
+      ) || /\.ioc$/i.test(f),
+  );
+  const roots = [...new Set(markers.map((f) => path.dirname(f)))].sort(
+    (a, b) => a.length - b.length,
+  );
+  const candidates = roots
+    .filter(
+      (candidate, index) =>
+        !roots.slice(0, index).some((parent) => inside(parent, candidate)),
+    )
+    .slice(0, 20)
+    .map((candidate) => inspectStm32Project(candidate));
+  if (!candidates.length) {
+    const project = inspectStm32Project(root);
+    return project.layout !== "unknown" ? project : null;
   }
-
-  walk(root, 0);
-  return candidates.sort((left, right) => {
-    const leftDepth = path.relative(root, left.root).split(path.sep).filter(Boolean).length;
-    const rightDepth = path.relative(root, right.root).split(path.sep).filter(Boolean).length;
-    return right.score - left.score || leftDepth - rightDepth || left.root.localeCompare(right.root);
-  })[0] || null;
+  return (
+    candidates.sort(
+      (a, b) => b.score - a.score || a.root.localeCompare(b.root),
+    )[0] || null
+  );
 }
-
-export function resolveConfiguredProjectPath(configuredPath: string, workspaceRoot: string): string {
-  if (!configuredPath) return workspaceRoot;
-  return path.isAbsolute(configuredPath) ? configuredPath : path.resolve(workspaceRoot, configuredPath);
+export function resolveConfiguredProjectPath(
+  configuredPath: string,
+  workspaceRoot: string,
+): string {
+  return resolveUserPath(configuredPath, workspaceRoot);
 }
