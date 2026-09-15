@@ -1,10 +1,10 @@
-# QC1 STM32F103 CMake Tools
+# QC1 STM32 CMake Tools
 
-QC1 permet de compiler et flasher un projet STM32F103 directement depuis VS Code. Le moteur intégré utilise **CMake + Ninja**. Si le firmware possède son propre `CMakeLists.txt`, QC1 conserve son générateur et sa toolchain; sinon, QC1 utilise le projet CMake embarqué dans le VSIX.
+QC1 permet de compiler, flasher et déboguer les projets STM32F1 single-core et les projets STM32H755 CM7/CM4 directement depuis VS Code. Le moteur intégré F1 utilise **CMake + Ninja**. Pour H755, QC1 orchestre le CMake natif généré par STM32CubeMX et ne remplace ni son code, ni sa toolchain, ni sa séquence de boot HSEM.
 
 Le rapport `QC1: Créer un rapport de diagnostic` comprend vingt sections et un résumé JSON `reportSchemaVersion: 2`. Il inspecte les chemins, la casse, CMake, les outils, les extensions, l'OS et le matériel avec des limites de lecture et des timeouts. Voir [l'audit de portabilité](AUDIT_PORTABILITY.md) pour les contrôles, tests et limites.
 
-Les réglages facultatifs `qc1.toolPaths`, `qc1.targetMcu` et `qc1.elfPath` permettent de déclarer des outils supplémentaires, une preuve de MCU et un artefact de build personnalisé.
+Les réglages facultatifs `qc1.toolPaths`, `qc1.targetMcu`, `qc1.elfPath`, `qc1.cm7ElfPath` et `qc1.cm4ElfPath` permettent de déclarer des outils supplémentaires, une preuve de MCU et des artefacts personnalisés.
 
 ## Par quoi commencer
 
@@ -14,13 +14,13 @@ Les réglages facultatifs `qc1.toolPaths`, `qc1.targetMcu` et `qc1.elfPath` perm
    code --install-extension qc1-stm32-tools-0.3.1.vsix --force
    ```
 
-2. Redémarre VS Code. Les extensions **CMake Tools** et **Embedded Build Tools** sont installées automatiquement. Au premier lancement, Embedded Build Tools télécharge CMake, Ninja et ARM GCC, puis les conserve dans le stockage de VS Code.
+2. Redémarre VS Code. Les extensions **CMake Tools**, **Embedded Build Tools** et **Cortex-Debug** sont installées automatiquement. Au premier lancement, Embedded Build Tools télécharge CMake, Ninja et ARM GCC, puis les conserve dans le stockage de VS Code.
 3. Ouvre le dossier du firmware, ou un workspace qui le contient. QC1 inspecte les sources dans les dossiers personnalisés et les références CMake; les noms de dossiers conservent leur casse exacte.
 4. Ouvre l'icône **QC1 STM32** dans la barre latérale.
 5. Lance **Show STM32 Status**, puis **Build Project**.
 6. Branche le ST-Link et lance **Flash STM32**.
 
-Les fichiers compilés se trouvent ensuite dans `build/qc1/`.
+Les fichiers compilés se trouvent dans `build/qc1/`, ou dans le `binaryDir` du preset CubeMX sélectionné.
 
 ## Structure minimale du projet
 
@@ -48,6 +48,26 @@ MonProjet/
 ```
 
 Le moteur intégré exige un startup et un linker non ambigus. Un projet CMake natif peut les générer ou les fournir via une bibliothèque : leur absence lors du scan ne bloque pas automatiquement la configuration. `Core/`, `Drivers/` et HAL restent facultatifs.
+
+### Projet STM32H755 CubeMX
+
+QC1 reconnaît notamment `STM32H755`, `STM32H755ZI`, `STM32H755ZIT6`, `STM32H755xx` et `NUCLEO-H755ZI-Q` à partir de plusieurs preuves concordantes : `.ioc`, dossiers CM7/CM4, defines, CMake, startups, linkers et HAL H7.
+
+```text
+MonProjetH755/
+├── CM7/                    # firmware Cortex-M7 distinct
+├── CM4/                    # firmware Cortex-M4 distinct
+├── Drivers/
+├── Common/
+├── CMakeLists.txt
+├── CMakePresets.json
+├── gcc-arm-none-eabi.cmake
+└── carte.ioc
+```
+
+Le build global compile les cibles par défaut CM7 et CM4. Les commandes **Build STM32H755 CM7** et **Build STM32H755 CM4** ajoutent `--target` avec la cible réellement découverte. Le flash global programme successivement les deux ELF avec `interface/stlink-dap.cfg`, `DUAL_CORE=1` et `target/stm32h7x.cfg`; les adresses proviennent des segments liés. Le fallback BIN `st-flash` n'est utilisé que si l'origine FLASH est lisible dans le linker CubeMX correspondant.
+
+Les commandes **Debug STM32H755 CM7** et **Debug STM32H755 CM4** lancent des sessions Cortex-Debug séparées avec OpenOCD, SWD, `DUAL_CORE=1` et le processeur 0 ou 1. Le debug simultané coordonné n'est pas annoncé comme supporté.
 
 ## Exemple prêt à copier : faire clignoter la LED D1-1 sans HAL
 
@@ -141,10 +161,13 @@ Pour exécuter les deux étapes en une fois, utilise **Build + Flash + Status**.
 - **Clean Project** : nettoie la cible CMake.
 - **Rebuild Project** : nettoie puis recompile.
 - **Flash STM32** : compile, puis flashe avec OpenOCD ou `st-flash`.
+- **Build/Flash STM32H755 CM7** et **CM4** : limite l'opération à la cible CMake du cœur demandé.
+- **Debug STM32F1 / projet single-core** : compile puis lance Cortex-Debug.
+- **Debug STM32H755 CM7** et **CM4** : compile puis lance la session SWD du cœur choisi.
 - **Build + Flash + Status** : exécute toute la séquence.
 - **Detect ST-Link** : vérifie la détection du programmateur.
 - **Open Serial Monitor** : ouvre `qc1.serialPort` au débit `qc1.baudRate`.
-- **Start OpenOCD Server** : lance OpenOCD avec les configurations ST-Link et STM32F1.
+- **Start OpenOCD Server** : choisit automatiquement la target OpenOCD STM32F1 ou STM32H7.
 - **Show STM32 Status** : affiche l'état du projet et des outils.
 - **Créer un rapport de diagnostic** : prépare un rapport Markdown partageable avec les versions, l'état du projet, des outils, du matériel, du build, de Git, les problèmes VS Code et le journal QC1 récent.
 
@@ -163,6 +186,8 @@ L'auto-détection suffit normalement. Ces réglages VS Code permettent toutefois
 - `qc1.autoDetectProject` : active ou désactive la recherche récursive du firmware;
 - `qc1.buildDirectory` : dossier de build, `build/qc1` par défaut;
 - `qc1.buildType` : type de build, `Debug` par défaut.
+- `qc1.cmakePreset` : preset explicite; vide, QC1 choisit le preset correspondant à `qc1.buildType`;
+- `qc1.cm7ElfPath` et `qc1.cm4ElfPath` : exceptions manuelles si la CMake File API ne peut pas attribuer les deux ELF.
 
 ## Dépannage rapide
 
@@ -170,7 +195,7 @@ L'auto-détection suffit normalement. Ces réglages VS Code permettent toutefois
 
 Après une erreur QC1, clique directement sur **Créer un rapport** dans la notification. Tu peux aussi utiliser le bouton du panneau QC1 ou ouvrir la palette de commandes et lancer **QC1 STM32: Créer un rapport de diagnostic**. Décris brièvement ce qui s'est passé; QC1 collecte ensuite les états utiles et ouvre une prévisualisation Markdown. Vérifie le contenu, puis enregistre-le ou copie-le avant de l'envoyer.
 
-QC1 ne lit pas directement le contenu du code source pour créer le rapport. Un message du compilateur déjà présent dans le journal ou dans les problèmes VS Code peut néanmoins contenir un extrait. Le rapport ne collecte pas les variables d'environnement, les réglages Liix ou l'URL du dépôt Git, et il masque automatiquement les chemins personnels, les clés, les jetons et les mots de passe connus.
+QC1 ne lit pas directement le contenu du code source pour créer le rapport. Un message du compilateur déjà présent dans le journal ou dans les problèmes VS Code peut néanmoins contenir un extrait. Le rapport ne collecte pas les variables d'environnement ni l'URL du dépôt Git, et il masque automatiquement les chemins personnels, les clés, les jetons et les mots de passe connus.
 
 ### Le projet n'est pas détecté
 
@@ -190,6 +215,6 @@ Vérifie d'abord que D1-1 est réellement reliée à PC13 et qu'aucun autre modu
 
 ## Ce qui est autonome
 
-Le VSIX contient l'interface QC1, le moteur TypeScript, le modèle CMake STM32F103, le fichier de toolchain et l'exemple bare metal D1-1. CMake, Ninja et ARM GCC sont fournis automatiquement par la dépendance Embedded Build Tools : aucune installation système de ces trois outils n'est requise.
+Le VSIX contient l'interface QC1, le moteur TypeScript et le modèle CMake STM32F103. Les projets H755 conservent leurs fichiers CubeMX HAL/CMSIS/BSP, startups et linkers. CMake, Ninja et ARM GCC peuvent être fournis par Embedded Build Tools; OpenOCD, le pilote ST-Link et le matériel restent des prérequis externes pour flash/debug.
 
 La seule limite concerne le matériel : un flash réel ne peut pas être autonome sans ST-Link, pilote compatible et outil de communication avec le programmateur.

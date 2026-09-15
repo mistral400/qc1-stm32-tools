@@ -11,6 +11,7 @@ import {
   ProjectScan,
   inside,
 } from "./filesystem";
+import { inspectTargetArchitecture, Qc1TargetArchitecture } from "./targetArchitecture";
 
 export type Qc1ProjectLayout =
   | "native-cmake"
@@ -39,6 +40,7 @@ export interface Qc1ProjectInspection {
   cmake: CmakeInspection;
   scan: ProjectScan;
   findings: Finding[];
+  architecture: Qc1TargetArchitecture;
 }
 export function readCmakeProjectName(file: string): string {
   return (
@@ -128,6 +130,7 @@ export function inspectStm32Project(
                 : "bare-metal"
               : "unknown";
   const findings = [...scan.findings, ...cmake.findings];
+  const architecture = inspectTargetArchitecture(root, scan, cmake);
   if (startupCandidates.length > 1 && referencedStartup.length !== 1)
     findings.push(
       finding(
@@ -163,6 +166,7 @@ export function inspectStm32Project(
     linkerCandidates,
     markers,
     cmake,
+    architecture,
     scan,
     findings,
     score:

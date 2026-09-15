@@ -708,7 +708,16 @@ export function getDashboardHtml(state: DashboardState): string {
           <div class="primary-actions">
             <button data-task-command class="primary-action" onclick="sendCommand('build')">Compiler</button>
             <button data-task-command class="primary-action" onclick="sendCommand('flash')">Flasher</button>
+            <button data-task-command class="primary-action" onclick="sendCommand('debug')">Déboguer</button>
             <button data-task-command class="primary-action" onclick="sendCommand('run')">Compiler + flasher</button>
+          </div>
+          <div class="button-row">
+            <button data-task-command class="secondary" onclick="sendCommand('build-cm7')">Build CM7</button>
+            <button data-task-command class="secondary" onclick="sendCommand('build-cm4')">Build CM4</button>
+            <button data-task-command class="secondary" onclick="sendCommand('flash-cm7')">Flash CM7</button>
+            <button data-task-command class="secondary" onclick="sendCommand('flash-cm4')">Flash CM4</button>
+            <button data-task-command class="secondary" onclick="sendCommand('debug-cm7')">Debug CM7</button>
+            <button data-task-command class="secondary" onclick="sendCommand('debug-cm4')">Debug CM4</button>
           </div>
           <div class="utility-actions">
             <button onclick="sendCommand('status')" class="secondary">Vérifier</button>
@@ -749,10 +758,14 @@ export function getDashboardHtml(state: DashboardState): string {
             <div id="projectStatusValue" class="big-value">${state.project.projectStatus}</div>
             <div class="row"><span class="label">Workspace</span><span class="value">${statusBadge(state.project.workspaceOpened, "OK", "erreur")}</span></div>
             <div class="row"><span class="label">Projet CMake</span><span class="value">${statusBadge(state.project.cmakeProjectReady, "OK", "introuvable")}</span></div>
+            <div class="row"><span class="label">MCU</span><span id="projectTargetDevice" class="value">${state.project.targetDevice}</span></div>
+            <div class="row"><span class="label">Cœurs</span><span id="projectCoreMode" class="value">${state.project.coreMode}</span></div>
+            <div class="row"><span class="label">CM7 / ELF</span><span id="projectCm7" class="value">${state.project.cm7Present ? (state.project.cm7ElfFound ? "présent / ELF OK" : "présent / ELF à construire") : "absent"}</span></div>
+            <div class="row"><span class="label">CM4 / ELF</span><span id="projectCm4" class="value">${state.project.cm4Present ? (state.project.cm4ElfFound ? "présent / ELF OK" : "présent / ELF à construire") : "absent"}</span></div>
             <div class="row"><span class="label">Core (optionnel)</span><span class="value">${statusBadge(state.project.coreFolderFound, "présent", "absent")}</span></div>
             <div class="row"><span class="label">Drivers (optionnel)</span><span class="value">${statusBadge(state.project.driversFolderFound, "présent", "absent")}</span></div>
-            <div class="row"><span class="label">Startup F103</span><span class="value">${statusBadge(state.project.startupFound, "OK", "introuvable")}</span></div>
-            <div class="row"><span class="label">Linker script</span><span class="value">${statusBadge(state.project.linkerScriptFound, "OK", "introuvable")}</span></div>
+            <div class="row"><span class="label">Startup</span><span class="value">${statusBadge(state.project.startupFound || state.project.cm7StartupFound || state.project.cm4StartupFound, "détecté", "introuvable")}</span></div>
+            <div class="row"><span class="label">Linker script</span><span class="value">${statusBadge(state.project.linkerScriptFound || state.project.cm7LinkerFound || state.project.cm4LinkerFound, "détecté", "introuvable")}</span></div>
           </div>
         </section>
 
@@ -770,7 +783,9 @@ export function getDashboardHtml(state: DashboardState): string {
             <div class="card-title">Toolchain</div>
             <div class="row"><span class="label">CMake</span><span class="value">${statusBadge(state.environment.cmakeDetected)}</span></div>
             <div class="row"><span class="label">GCC ARM</span><span class="value">${statusBadge(state.environment.gccDetected)}</span></div>
+            <div class="row"><span class="label">GDB ARM</span><span class="value">${statusBadge(state.environment.gdbDetected)}</span></div>
             <div class="row"><span class="label">OpenOCD</span><span class="value">${statusBadge(state.environment.openocdDetected)}</span></div>
+            <div class="row"><span class="label">Cortex-Debug</span><span class="value">${statusBadge(state.environment.debuggerDetected)}</span></div>
             <div class="row"><span class="label">st-flash installé</span><span class="value">${statusBadge(state.environment.stFlashInstalled)}</span></div>
             <div class="row"><span class="label">Probe ST-Link</span><span class="value">${state.environment.stlinkProbeStatus}</span></div>
             <div class="row"><span class="label">Mode portable</span><span class="value">${statusBadge(state.environment.offlinePortable)}</span></div>
@@ -1015,6 +1030,10 @@ export function getDashboardHtml(state: DashboardState): string {
       setText("flashMethod", state.flash.method);
       setText("flashMcu", state.flash.targetMCU);
       setText("projectStatusValue", state.project.projectStatus);
+      setText("projectTargetDevice", state.project.targetDevice);
+      setText("projectCoreMode", state.project.coreMode);
+      setText("projectCm7", state.project.cm7Present ? (state.project.cm7ElfFound ? "présent / ELF OK" : "présent / ELF à construire") : "absent");
+      setText("projectCm4", state.project.cm4Present ? (state.project.cm4ElfFound ? "présent / ELF OK" : "présent / ELF à construire") : "absent");
       setText("diagnosticCode", state.diagnostic.code);
       setText("diagnosticTitle", state.diagnostic.title);
       setText("diagnosticMessage", state.diagnostic.message);

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add STM32H755/NUCLEO-H755ZI-Q detection with CM7-only, CM4-only and dual-core architecture models.
+- Respect CubeMX CMake presets and distinct CM7/CM4 targets, startups, linker scripts and ELF artifacts.
+- Add global/core-specific build and flash plus separate Cortex-Debug CM7/CM4 sessions using the STM32H7 OpenOCD target.
+- Diagnose H7 HAL, CMSIS, CMSIS Device, optional BSP usage, per-core compiler settings and tool availability.
+- Preserve the STM32F1 build, flash and OpenOCD paths and add a single-core debug command.
+- Remove stale generated Liix/AI files from the packaged `out` tree; QC1 contains no assistant IA functionality.
 - Add bounded, case-aware project discovery, static CMake analysis and existing File API inspection.
 - Recognize custom sources/startups, linker MEMORY and ambiguous MCU evidence without blocking native CMake on CubeMX layout assumptions.
 - Add diagnostic schema v2 with OS, extension, toolchain, USB/serial, MCU and structured finding sections; redact before JSON serialization.

@@ -84,6 +84,17 @@ export interface QC1ProjectStatus {
   projectStatus: "OK" | "PARTIEL" | "ERREUR";
 
   cmakeProjectReady: boolean;
+  targetFamily: string;
+  targetDevice: string;
+  coreMode: string;
+  cm7Present: boolean;
+  cm4Present: boolean;
+  cm7ElfFound: boolean;
+  cm4ElfFound: boolean;
+  cm7StartupFound: boolean;
+  cm4StartupFound: boolean;
+  cm7LinkerFound: boolean;
+  cm4LinkerFound: boolean;
 
   coreFolderFound: boolean;
   driversFolderFound: boolean;
@@ -114,7 +125,9 @@ export interface QC1EnvironmentStatus {
   offlinePortable: boolean;
 
   gccDetected: boolean;
+  gdbDetected: boolean;
   openocdDetected: boolean;
+  debuggerDetected: boolean;
   stlinkDetected: boolean;
   stFlashInstalled: boolean;
   stlinkProbeStatus: "OK" | "non détecté" | "non testé";
@@ -214,6 +227,17 @@ export const defaultDashboardState: DashboardState = {
     projectStatus: "ERREUR",
 
     cmakeProjectReady: false,
+    targetFamily: "unknown",
+    targetDevice: "unknown",
+    coreMode: "unknown",
+    cm7Present: false,
+    cm4Present: false,
+    cm7ElfFound: false,
+    cm4ElfFound: false,
+    cm7StartupFound: false,
+    cm4StartupFound: false,
+    cm7LinkerFound: false,
+    cm4LinkerFound: false,
 
     coreFolderFound: false,
     driversFolderFound: false,
@@ -243,7 +267,9 @@ export const defaultDashboardState: DashboardState = {
     offlinePortable: true,
 
     gccDetected: false,
+    gdbDetected: false,
     openocdDetected: false,
+    debuggerDetected: false,
     stlinkDetected: false,
     stFlashInstalled: false,
     stlinkProbeStatus: "non testé",

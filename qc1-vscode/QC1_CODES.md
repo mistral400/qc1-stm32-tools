@@ -131,6 +131,26 @@ Documentation officielle des codes de diagnostic utilisés par QC1 STM32 Tools.
 | 804 | BUNDLED_CMAKE_FOUND | Projet CMake QC1 intégré trouvé |
 | 805 | BUILD_FOLDER_FOUND | Dossier build trouvé |
 
+## Codes structurés STM32H755
+
+| Code | Description |
+|---|---|
+| QC1-H755-001 | Aucun firmware CM7/CM4 reconnu malgré les preuves H755 |
+| QC1-H755-002/003 | CMake CM7/CM4 distinct introuvable |
+| QC1-H755-004/005 | Startup CM7/CM4 absent ou ambigu |
+| QC1-H755-006/007 | Linker CM7/CM4 absent ou ambigu |
+| QC1-H755-008/009 | Nom de cible CMake CM7/CM4 non résolu |
+| QC1-H755-010 | HAL STM32H7 absent |
+| QC1-H755-011 | CMSIS absent |
+| QC1-H755-012 | CMSIS Device STM32H7 absent |
+| QC1-H755-013 | BSP NUCLEO H7 utilisé mais absent |
+| QC1-H755-014/015 | Cœur demandé absent ou cible CMake non résolue |
+| QC1-H755-016/017 | Flags Cortex/FPU CM7/CM4 non confirmés |
+| QC1-H755-018/019 | Defines CM7/CM4 non confirmés |
+| QC1-H755-020/021 | GCC ARM ou Ninja non détecté |
+| QC1-H755-022/023 | OpenOCD ou Cortex-Debug non détecté |
+| QC1-H755-024 | Un cœur doit être choisi pour le debug dual-core |
+
 ---
 
 # Codes internes extension

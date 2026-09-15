@@ -104,6 +104,34 @@ test("extension integration: multi-root, native validation, report and CMake arg
   assert.ok(!invocation.args.includes("-G"));
   assert.ok(!invocation.args.some((a) => a.includes("QC1_STARTUP")));
   assert.ok(invocation.args.includes(firmware));
+  const h755Status = {
+    ...status,
+    architecture: {
+      ...status.architecture,
+      family: "stm32h755",
+      device: "STM32H755ZIT6",
+      coreMode: "dual",
+      cm7: { ...status.architecture.cm7, present: true },
+      cm4: { ...status.architecture.cm4, present: true }
+    },
+    cm7TargetName: "firmware_CM7",
+    cm4TargetName: "firmware_CM4",
+    cm7ElfPath: path.join(firmware, "build", "CM7.elf"),
+    cm4ElfPath: path.join(firmware, "build", "CM4.elf"),
+    cm7BinPath: path.join(firmware, "build", "CM7.bin"),
+    cm4BinPath: path.join(firmware, "build", "CM4.bin"),
+    cmakeConfigurePreset: "Debug",
+    cmakeBuildPreset: "Debug",
+    openocdOk: true,
+    openocdPath: "openocd"
+  };
+  const cm7Build = buildProcessInvocations(h755Status, "build-cm7");
+  assert.deepEqual(cm7Build[0].args, ["--preset", "Debug"]);
+  assert.ok(cm7Build[1].args.includes("firmware_CM7"));
+  const dualFlash = buildProcessInvocations(h755Status, "flash").filter(item => item.phase === "flashing");
+  assert.equal(dualFlash.length, 2);
+  assert.ok(dualFlash[0].args.includes("target/stm32h7x.cfg"));
+  assert.match(dualFlash[1].args.at(-1), /cpu1/);
   assert.ok(scopes.includes(firmware));
   const provider = new QC1PanelProvider(uri(context.extensionPath), context);
   await provider.createDiagnosticReport();

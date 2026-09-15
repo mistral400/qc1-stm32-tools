@@ -1,7 +1,7 @@
 {
   "name": "qc1-stm32-tools",
-  "displayName": "QC1 STM32F103 CMake Tools",
-  "description": "Extension STM32F103 autonome avec moteur de build CMake intégré",
+  "displayName": "QC1 STM32 CMake Tools",
+  "description": "Outils CMake STM32F1 et STM32H755 dual-core pour VS Code",
   "version": "0.3.1",
   "publisher": "Mistral400",
   "icon": "media/icon.png",
@@ -25,7 +25,8 @@
   },
   "extensionDependencies": [
     "ms-vscode.cmake-tools",
-    "mylonics.embedded-build-tools"
+    "mylonics.embedded-build-tools",
+    "marus25.cortex-debug"
   ],
   "activationEvents": [
     "onView:qc1.panel",
@@ -34,7 +35,14 @@
     "workspaceContains:**/*.eww",
     "workspaceContains:**/*.ewp",
     "onCommand:qc1.build",
+    "onCommand:qc1.buildCm7",
+    "onCommand:qc1.buildCm4",
     "onCommand:qc1.flash",
+    "onCommand:qc1.debug",
+    "onCommand:qc1.flashCm7",
+    "onCommand:qc1.flashCm4",
+    "onCommand:qc1.debugCm7",
+    "onCommand:qc1.debugCm4",
     "onCommand:qc1.run",
     "onCommand:qc1.status",
     "onCommand:qc1.createDiagnosticReport"
@@ -87,6 +95,48 @@
         "title": "Flash STM32",
         "category": "QC1 STM32",
         "icon": "$(debug-start)"
+      },
+      {
+        "command": "qc1.debug",
+        "title": "Debug STM32F1 / projet single-core",
+        "category": "QC1 STM32",
+        "icon": "$(debug)"
+      },
+      {
+        "command": "qc1.buildCm7",
+        "title": "Build STM32H755 CM7",
+        "category": "QC1 STM32",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "qc1.buildCm4",
+        "title": "Build STM32H755 CM4",
+        "category": "QC1 STM32",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "qc1.flashCm7",
+        "title": "Flash STM32H755 CM7",
+        "category": "QC1 STM32",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "qc1.flashCm4",
+        "title": "Flash STM32H755 CM4",
+        "category": "QC1 STM32",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "qc1.debugCm7",
+        "title": "Debug STM32H755 CM7",
+        "category": "QC1 STM32",
+        "icon": "$(debug)"
+      },
+      {
+        "command": "qc1.debugCm4",
+        "title": "Debug STM32H755 CM4",
+        "category": "QC1 STM32",
+        "icon": "$(debug)"
       },
       {
         "command": "qc1.run",
@@ -152,9 +202,16 @@
     "menus": {
       "commandPalette": [
         { "command": "qc1.build" },
+        { "command": "qc1.buildCm7" },
+        { "command": "qc1.buildCm4" },
         { "command": "qc1.clean" },
         { "command": "qc1.rebuild" },
         { "command": "qc1.flash" },
+        { "command": "qc1.debug" },
+        { "command": "qc1.flashCm7" },
+        { "command": "qc1.flashCm4" },
+        { "command": "qc1.debugCm7" },
+        { "command": "qc1.debugCm4" },
         { "command": "qc1.run" },
         { "command": "qc1.status" },
         { "command": "qc1.detectStlink" },
@@ -199,6 +256,24 @@
             "default": "",
             "scope": "resource",
             "description": "Artefact ELF explicite (relatif au projet ou absolu). Vide: File API CMake si disponible, puis nom de cible."
+          },
+          "qc1.cm7ElfPath": {
+            "type": "string",
+            "default": "",
+            "scope": "resource",
+            "description": "Artefact ELF CM7 explicite. Vide = détection par CMake File API."
+          },
+          "qc1.cm4ElfPath": {
+            "type": "string",
+            "default": "",
+            "scope": "resource",
+            "description": "Artefact ELF CM4 explicite. Vide = détection par CMake File API."
+          },
+          "qc1.cmakePreset": {
+            "type": "string",
+            "default": "",
+            "scope": "resource",
+            "description": "Preset CMake à utiliser. Vide = preset correspondant à qc1.buildType lorsqu'il existe."
           },
           "qc1.targetMcu": {
             "type": "string",

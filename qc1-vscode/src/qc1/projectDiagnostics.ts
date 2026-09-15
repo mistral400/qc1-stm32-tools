@@ -191,6 +191,7 @@ export function inspectProjectDetails(
       includesChecked: checked,
     },
     mcu: {
+      architecture: project.architecture,
       family: series.map((s) => s.slice(0, 7)),
       series,
       exact: exact.length === 1 ? exact[0] : "unknown",
