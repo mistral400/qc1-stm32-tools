@@ -285,6 +285,24 @@ test("process timeout and pre-aborted requests always settle", async () => {
     "Cancelled",
   );
 });
+
+test("a timed-out CMake-like process does not leave its compiler child running", async t => {
+  if (process.platform === "win32") { t.skip("POSIX process-group check"); return; }
+  const result = await runProcess(process.execPath, ["-e",
+    "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); console.log(c.pid); setInterval(()=>{},1000)"
+  ], { timeoutMs: 400 });
+  assert.equal(result.timedOut, true);
+  assert.equal(result.error, "Process timeout");
+  const pid = Number(result.stdout.trim());
+  assert.ok(Number.isInteger(pid) && pid > 0);
+  let alive = true;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try { process.kill(pid, 0); }
+    catch (error) { if (error.code === "ESRCH") { alive = false; break; } throw error; }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(alive, false, "the compiler child must be terminated with its parent process group");
+});
 test("diagnostic inventory is complete and untrusted tool execution is skipped", async () => {
   const tools = await collectTools({
     trusted: false,

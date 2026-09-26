@@ -11,6 +11,7 @@ import {
   ProjectScan,
   inside,
 } from "./filesystem";
+import { applyCoreBuildMetadata, readCoreBuildMetadata, configuredCoreTarget } from "./coreBuild";
 import { inspectTargetArchitecture, Qc1TargetArchitecture } from "./targetArchitecture";
 
 export type Qc1ProjectLayout =
@@ -131,7 +132,20 @@ export function inspectStm32Project(
               : "unknown";
   const findings = [...scan.findings, ...cmake.findings];
   const architecture = inspectTargetArchitecture(root, scan, cmake);
-  if (startupCandidates.length > 1 && referencedStartup.length !== 1)
+  if (buildDirectory && architecture.family === "stm32h755") {
+    const metadata = readCoreBuildMetadata(root, buildDirectory, cmake.cache.CMAKE_BUILD_TYPE || "Debug");
+    applyCoreBuildMetadata(architecture, metadata);
+    if (metadata.buildTargets.length && metadata.buildTargets.some(target => configuredCoreTarget(metadata.buildTargets, "cm7") === target.name || configuredCoreTarget(metadata.buildTargets, "cm4") === target.name)) {
+      const unknown = findings.find(item => item.title === "TARGET_UNKNOWN");
+      if (unknown) {
+        unknown.title = "TARGET_STATIC_UNRESOLVED";
+        unknown.message = "La cible n'est pas déduite du texte CMake; la File API confirme les cibles configurées.";
+      }
+    }
+  }
+  const dualStartupsResolved = architecture.coreMode === "dual" && Boolean(architecture.cm7.startupPath && architecture.cm4.startupPath);
+  const dualLinkersResolved = architecture.coreMode === "dual" && Boolean(architecture.cm7.linkerScriptPath && architecture.cm4.linkerScriptPath);
+  if (startupCandidates.length > 1 && referencedStartup.length !== 1 && !dualStartupsResolved)
     findings.push(
       finding(
         "QC1-PRJ-006",
@@ -140,7 +154,7 @@ export function inspectStm32Project(
         root,
       ),
     );
-  if (linkerCandidates.length > 1 && referencedLinker.length !== 1)
+  if (linkerCandidates.length > 1 && referencedLinker.length !== 1 && !dualLinkersResolved)
     findings.push(
       finding(
         "QC1-PRJ-007",

@@ -23,6 +23,7 @@ export interface ConfiguredTarget {
   includes: string[];
   definitions: string[];
   fragments: string[];
+  compileFragments?: string[];
 }
 export interface FileApiSnapshot {
   status: string;
@@ -114,6 +115,7 @@ export function readFileApi(
             definitions: groups
               .flatMap((g) => array(g.defines).map((d) => str(d.define)))
               .slice(0, 500),
+            compileFragments: groups.map(g => array(g.compileCommandFragments).map(f => str(f.fragment)).join(" ")),
             fragments: [
               ...groups.flatMap((g) => array(g.compileCommandFragments)),
               ...array(object(target.link).commandFragments),

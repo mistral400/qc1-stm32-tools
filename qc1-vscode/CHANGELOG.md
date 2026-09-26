@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Split the dashboard into five project-manager pages and small render/client modules; preserve navigation, terminal output and unsaved settings during host updates.
+- Extract discovery, configuration and recent-project controllers; serialize writes and ignore cancelled/obsolete discovery results and errors.
+- Make the one active `qc1.projectPath` window-scoped: Workspace for internal/external projects when a workspace exists, User only in an empty window.
+- Show validated recent paths (maximum eight), active-project evidence, contextual F1/H755 actions, normalized tools and centralized diagnostics.
+- Add opt-in bounded automatic discovery, portable custom roots, lightweight invalidation and scoped structural watchers without polling.
+- Keep ST-Link detection manual and unknown until measured; reveal existing ELF/BIN/HEX/MAP outputs without changing builds.
+- Escape project content, use a nonce-authorized static WebView script and validate discriminated bridge messages against known commands/paths.
+- Fix legacy H755 status validation rejecting manual native CMake projects without local CubeMX HAL/CMSIS/startup folders; retain static warnings and let CMake verify dependencies.
+- Add controller, WebView and mocked VS Code integration coverage. See PROJECT_MANAGER.md for architecture and remaining validation limits.
 - Add STM32H755/NUCLEO-H755ZI-Q detection with CM7-only, CM4-only and dual-core architecture models.
 - Respect CubeMX CMake presets and distinct CM7/CM4 targets, startups, linker scripts and ELF artifacts.
 - Add global/core-specific build and flash plus separate Cortex-Debug CM7/CM4 sessions using the STM32H7 OpenOCD target.

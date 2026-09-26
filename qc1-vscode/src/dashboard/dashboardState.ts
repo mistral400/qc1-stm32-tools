@@ -16,6 +16,9 @@
  */
 
 import type { Qc1ProgressPhase } from "./progressManager";
+import type { ProjectUiState } from "./projectUiState";
+import type { RecentProject } from "../qc1/recentProjectsController";
+import type { ToolUiState, ArtifactUiState } from "./managerUiState";
 
 // Valeurs de couleur/gravité utilisées pour choisir le style d'un diagnostic.
 export type QC1StatusLevel =
@@ -131,6 +134,8 @@ export interface QC1EnvironmentStatus {
   stlinkDetected: boolean;
   stFlashInstalled: boolean;
   stlinkProbeStatus: "OK" | "non détecté" | "non testé";
+  stlinkModel?: string;
+  stlinkCheckedAt?: string;
   cmakeDetected: boolean;
 }
 
@@ -151,6 +156,12 @@ export interface DashboardState {
   project: QC1ProjectStatus;
 
   environment: QC1EnvironmentStatus;
+
+  projectDiscovery: ProjectUiState;
+  recentProjects: RecentProject[];
+  tools: ToolUiState[];
+  diagnostics: QC1Diagnostic[];
+  artifacts: ArtifactUiState[];
 }
 
 /** Convertit le nom technique de Node.js en libellé lisible dans l'interface. */
@@ -169,6 +180,10 @@ export function getOsLabel(platform: NodeJS.Platform): string {
 
 // Premier état affiché avant la détection du projet ou le lancement d'une commande.
 export const defaultDashboardState: DashboardState = {
+  recentProjects: [],
+  tools: [],
+  diagnostics: [],
+  artifacts: [],
   currentAction: "Idle",
   projectName: "--",
   lastCommand: "--",
@@ -274,6 +289,13 @@ export const defaultDashboardState: DashboardState = {
     stFlashInstalled: false,
     stlinkProbeStatus: "non testé",
     cmakeDetected: false
+  },
+
+  projectDiscovery: {
+    status: "idle",
+    message: "",
+    candidates: [],
+    selectedPath: ""
   }
 };
 

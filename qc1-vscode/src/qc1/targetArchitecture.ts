@@ -1,7 +1,8 @@
 /** STM32 target classification shared by discovery, diagnostics and command routing. */
 import * as path from "path";
-import { CmakeInspection, parseCmake } from "./cmakeInspection";
+import { CmakeInspection, inspectCmake } from "./cmakeInspection";
 import { ProjectScan, readText } from "./filesystem";
+import { resolvedTargetName } from "./coreBuild";
 
 export type Qc1McuFamily = "stm32f1" | "stm32h755" | "unknown";
 export type Qc1Core = "cm7" | "cm4";
@@ -64,8 +65,8 @@ function belongsToCore(file: string, core: Qc1Core): boolean {
   return marker.test(normalized);
 }
 
-function chooseCoreFile(candidates: string[], core: Qc1Core, referenced: string[]): { path: string; candidates: string[] } {
-  const matches = candidates.filter((file) => belongsToCore(file, core));
+function chooseCoreFile(root: string, candidates: string[], core: Qc1Core, referenced: string[]): { path: string; candidates: string[] } {
+  const matches = candidates.filter((file) => belongsToCore(path.relative(root, file), core));
   const referencedMatches = matches.filter((file) => referenced.includes(file));
   return {
     path: referencedMatches.length === 1 ? referencedMatches[0] : matches.length === 1 ? matches[0] : "",
@@ -75,7 +76,8 @@ function chooseCoreFile(candidates: string[], core: Qc1Core, referenced: string[
 
 function cmakeProjectName(file: string): string {
   if (!file) return "";
-  return parseCmake(readText(file)).commands.find((command) => command.name === "project")?.args[0] || "";
+  const name = inspectCmake(path.dirname(file), []).projectName;
+  return resolvedTargetName(name) ? name : "";
 }
 
 function coreInspection(
@@ -87,20 +89,22 @@ function coreInspection(
 ): Qc1CoreInspection {
   const directoryName = core.toUpperCase();
   const directory = directoryBySegments(root, files, [directoryName]);
-  const cmakePath = files.find((file) => path.basename(file) === "CMakeLists.txt" && belongsToCore(file, core)) || "";
+  const cmakePath = files.find((file) => path.basename(file) === "CMakeLists.txt" && belongsToCore(path.relative(root, file), core)) || "";
   const startups = files.filter((file) => /^startup(?:_.*)?\.(s|asm)$/i.test(path.basename(file)));
   const linkers = files.filter((file) => /\.ld$/i.test(file));
-  const startup = chooseCoreFile(startups, core, cmake.sources);
-  const linker = chooseCoreFile(linkers, core, cmake.linkerScripts);
-  const matchingTargets = cmake.executableTargets.filter((target) => belongsToCore(target, core));
+  const startup = chooseCoreFile(root, startups, core, cmake.sources);
+  const flashLinkers = linkers.filter(file => /(?:^|[_-])flash(?:[_.-]|$)/i.test(path.basename(file)));
+  const linker = chooseCoreFile(root, flashLinkers.some(file => belongsToCore(path.relative(root, file), core)) ? flashLinkers : linkers.filter(file => !/sram|(?:^|[_-])ram/i.test(path.basename(file))), core, cmake.linkerScripts);
+  const matchingTargets = cmake.executableTargets.filter((target) => resolvedTargetName(target) && belongsToCore(target, core));
   const targetName = matchingTargets.length === 1 ? matchingTargets[0] : cmakeProjectName(cmakePath);
   const expectedFlags = core === "cm7"
     ? ["-mcpu=cortex-m7", "-mthumb", "-mfpu=fpv5-d16", "-mfloat-abi=hard"]
     : ["-mcpu=cortex-m4", "-mthumb", "-mfpu=fpv4-sp-d16", "-mfloat-abi=hard"];
   const expectedDefines = [core === "cm7" ? "CORE_CM7" : "CORE_CM4", "STM32H755xx", "USE_HAL_DRIVER"];
-  const coreText = files.filter((file) => belongsToCore(file, core) && /(?:CMakeLists\.txt|\.cmake)$/i.test(path.basename(file)))
+  const coreText = files.filter((file) => belongsToCore(path.relative(root, file), core) && /(?:CMakeLists\.txt|\.cmake)$/i.test(path.basename(file)))
     .map((file) => readText(file, 256 * 1024)).join("\n");
-  const settingsText = coreText || `${cmake.flags.join(" ")}\n${cmake.definitions.join(" ")}`;
+  const coreCmake = cmakePath ? inspectCmake(path.dirname(cmakePath), files) : cmake;
+  const settingsText = `${coreText}\n${coreCmake.flags.join(" ")}\n${coreCmake.definitions.join(" ")}`;
   return {
     core,
     present,
@@ -140,8 +144,8 @@ export function inspectTargetArchitecture(
   const deviceMatch = searchable.match(/STM32H755(?:ZIT6|ZI|xx)?/i);
   const device = family === "stm32h755" ? (deviceMatch?.[0].toUpperCase() || "STM32H755") : family === "stm32f1" ? (f1Matches[0]?.toUpperCase() || "STM32F1") : "unknown";
 
-  const hasCm7 = family === "stm32h755" && (files.some((file) => belongsToCore(file, "cm7")) || /\bCORE_CM7\b/i.test(searchable));
-  const hasCm4 = family === "stm32h755" && (files.some((file) => belongsToCore(file, "cm4")) || /\bCORE_CM4\b/i.test(searchable));
+  const hasCm7 = family === "stm32h755" && (files.some((file) => belongsToCore(path.relative(root, file), "cm7")) || /\bCORE_CM7\b/i.test(searchable));
+  const hasCm4 = family === "stm32h755" && (files.some((file) => belongsToCore(path.relative(root, file), "cm4")) || /\bCORE_CM4\b/i.test(searchable));
   const coreMode: Qc1CoreMode = family === "stm32f1" ? "single" : hasCm7 && hasCm4 ? "dual" : hasCm7 ? "cm7" : hasCm4 ? "cm4" : "unknown";
   const iocPath = files.find((file) => /\.ioc$/i.test(file)) || "";
   const halPath = directoryBySegments(root, files, ["Drivers", "STM32H7xx_HAL_Driver"]);

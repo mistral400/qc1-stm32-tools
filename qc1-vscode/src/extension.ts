@@ -37,11 +37,12 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { executableExists, resolveExecutable, collectTools, runProcess } from "./qc1/processTools";
+import { executableExists, resolveExecutable, collectTools, runProcess, buildToolEnvironment, processSucceeded } from "./qc1/processTools";
 import { inside, readText, resolveUserPath } from "./qc1/filesystem";
 import { inspectProjectDetails } from "./qc1/projectDiagnostics";
 import { inspectSystem, inspectDevices } from "./qc1/systemInspection";
 import { readFileApi } from "./qc1/cmakeFileApi";
+import { readCoreBuildMetadata, configuredCoreArtifact, configuredCoreTarget, applyCoreBuildMetadata, resolvedTargetName, coreBuildArguments } from "./qc1/coreBuild";
 import { completeExtensionInventory } from "./qc1/extensionInventory";
 import {
   DashboardState,
@@ -49,7 +50,7 @@ import {
   getOsLabel,
   finishProgress
 } from "./dashboard/dashboardState";
-import { getDashboardHtml } from "./dashboard/dashboardHtml";
+import { getDashboardHtml, renderDashboardViews } from "./dashboard/dashboardHtml";
 import { ProgressManager, Qc1ProgressUpdate } from "./dashboard/progressManager";
 import { parseQc1Output } from "./qc1/qc1Parser";
 import {
@@ -66,7 +67,8 @@ import {
   getCortexDebugConfiguration,
   readFlashOrigin,
   readStlinkProbeModel,
-  readStlinkProbeStatus
+  readStlinkProbeStatus,
+  probeStlink
 } from "./qc1/hardware";
 import { inspectCmakePresets } from "./qc1/cmakePresets";
 import { coreFromCommand, Qc1Core, Qc1TargetArchitecture } from "./qc1/targetArchitecture";
@@ -74,6 +76,18 @@ import {
   buildDiagnosticReport,
   DiagnosticToolReport
 } from "./qc1/diagnosticReport";
+import {
+  buildDiscoveryRoots,
+  mapProjectCandidates,
+} from "./dashboard/projectUiState";
+import type { ProjectCandidate } from "./qc1/projectScanner";
+import { discoverProjects, analyzeProject } from "./qc1/projectScanner";
+import { ProjectDiscoveryController } from "./qc1/projectDiscoveryController";
+import { ProjectConfigurationController, ProjectSettingsInput, projectWriteTarget, assertOperationConfiguration } from "./qc1/projectConfiguration";
+import { RecentProjectsController, directoryAvailable } from "./qc1/recentProjectsController";
+import { collectProjectArtifacts } from "./qc1/projectArtifacts";
+import { normalizeTools } from "./dashboard/managerUiState";
+import { parseWebviewMessage, qc1Commands } from "./dashboard/webviewMessages";
 
 // État partagé entre le contrôleur et la Webview QC1.
 let dashboardState: DashboardState = defaultDashboardState;
@@ -81,16 +95,27 @@ let dashboardPanel: vscode.WebviewView | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
 let stlinkProbeStatus: "OK" | "non détecté" | "non testé" = "non testé";
 let stlinkProbeModel = "unknown";
+let stlinkCheckedAt: string | undefined;
 let embeddedCmakePath = "";
 let embeddedGccPath = "";
 let embeddedNinjaPath = "";
 const projectCache = new Map<string, { time: number; value: Qc1ProjectInspection | null }>();
 function discoverProject(root: string): Qc1ProjectInspection | null {
   const cached = projectCache.get(root);
-  if (cached && Date.now() - cached.time < 1500) return cached.value;
+  if (cached && Date.now() - cached.time < 15000) return cached.value;
   const value = findStm32Project(root);
   if (projectCache.size > 20) projectCache.clear();
   projectCache.set(root, { time: Date.now(), value });
+  return value;
+}
+
+function inspectProjectCached(root: string): Qc1ProjectInspection {
+  const key = `inspect:${root}`;
+  const cached = projectCache.get(key);
+  if (cached?.value && Date.now() - cached.time < 15000) return cached.value;
+  const value = inspectStm32Project(root);
+  if (projectCache.size > 20) projectCache.clear();
+  projectCache.set(key, { time: Date.now(), value });
   return value;
 }
 
@@ -144,8 +169,24 @@ function getWorkspaceRoot(): string | undefined {
   return roots.find(root => vscode.workspace.getConfiguration("qc1", vscode.Uri.file(root)).get<string>("projectPath", "").trim() || discoverProject(root)) || roots[0];
 }
 
+function getWorkspaceRoots(): string[] {
+  return [...new Set((vscode.workspace.workspaceFolders || [])
+    .filter((folder) => folder.uri.scheme === "file")
+    .map((folder) => folder.uri.fsPath))];
+}
+
 function qc1Configuration(root = getWorkspaceRoot()): vscode.WorkspaceConfiguration {
-  return vscode.workspace.getConfiguration("qc1", root ? vscode.Uri.file(root) : undefined);
+  const configured = vscode.workspace.getConfiguration("qc1").get<string>("projectPath", "").trim();
+  const scope = configured ? resolveUserPath(configured, root || process.cwd()) : root;
+  return vscode.workspace.getConfiguration("qc1", scope ? vscode.Uri.file(scope) : undefined);
+}
+
+function operationConfigurationFingerprint(): string {
+  const config = qc1Configuration();
+  return JSON.stringify([vscode.workspace.getConfiguration("qc1").get("projectPath", ""), ...[
+    "buildDirectory", "buildType", "cmakePreset", "elfPath", "cm7ElfPath", "cm4ElfPath",
+    "compilerPath", "openocdPath", "cmakePath", "stlinkPath", "targetMcu",
+  ].map((key) => config.get(key))]);
 }
 
 
@@ -157,7 +198,10 @@ function findExecutable(name: string): string | null {
 function getExistingSettingPath(config: vscode.WorkspaceConfiguration, key: string): string {
   const configuredPath = (config.get<string>(key) || "").trim();
   if (!configuredPath) return "";
-  const resolved = resolveUserPath(configuredPath, getWorkspaceRoot() || process.cwd());
+  const workspaceRoot = getWorkspaceRoot() || process.cwd();
+  const selected = vscode.workspace.getConfiguration("qc1").get<string>("projectPath", "").trim();
+  const selectedRoot = selected ? resolveUserPath(selected, workspaceRoot) : workspaceRoot;
+  const resolved = resolveUserPath(configuredPath, selectedRoot);
   return executableExists(resolved) ? resolved : resolveExecutable(configuredPath);
 }
 
@@ -256,24 +300,6 @@ type Qc1Status = {
   stlinkProbeOk: boolean;
 };
 
-function targetMatchesCore(target: ReturnType<typeof readFileApi>["targets"][number], core: Qc1Core): boolean {
-  const marker = core === "cm7" ? /(?:CORE_CM7|(?:^|[\\/_\-.])CM7(?:[\\/_\-.]|$))/i : /(?:CORE_CM4|(?:^|[\\/_\-.])CM4(?:[\\/_\-.]|$))/i;
-  return marker.test([target.name, ...target.definitions, ...target.sources, ...target.artifacts].join(" "));
-}
-
-function configuredCoreArtifact(
-  targets: ReturnType<typeof readFileApi>["targets"],
-  architecture: Qc1TargetArchitecture,
-  core: Qc1Core,
-): string {
-  if (!architecture[core].present) return "";
-  const executables = targets.filter((target) => target.type === "EXECUTABLE" && target.artifacts.length > 0);
-  const matches = executables.filter((target) => targetMatchesCore(target, core));
-  const candidates = matches.length ? matches : architecture.coreMode === core && executables.length === 1 ? executables : [];
-  const artifacts = candidates.flatMap((target) => target.artifacts).filter((file) => fileExists(file));
-  return artifacts.length === 1 ? artifacts[0] : "";
-}
-
 function binaryForElf(elfPath: string, buildPath: string, fallbackName: string): string {
   if (!elfPath) return buildPath ? path.join(buildPath, `${fallbackName}.bin`) : "";
   const extension = path.extname(elfPath);
@@ -331,32 +357,13 @@ function getExitCode(error: unknown): number | null {
 }
 
 function isTimeoutError(error: unknown): boolean {
-  const err = error as { killed?: boolean; signal?: string; message?: string };
-  return Boolean(err?.killed && err.signal === "SIGTERM") || Boolean(err?.message?.toLowerCase().includes("timed out"));
+  const err = error as { killed?: boolean; timedOut?: boolean; signal?: string; message?: string };
+  return Boolean(err?.timedOut || (err?.killed && err.signal === "SIGTERM")) || /(?:timed out|process timeout)/i.test(err?.message || "");
 }
 
 /** Liste blanche des commandes acceptées depuis la Webview. */
 function isAllowedQc1Command(command: string): boolean {
-  return [
-    "build",
-    "clean",
-    "rebuild",
-    "tsmake",
-    "flash",
-    "debug",
-    "build-cm7",
-    "build-cm4",
-    "flash-cm7",
-    "flash-cm4",
-    "debug-cm7",
-    "debug-cm4",
-    "run",
-    "health",
-    "status",
-    "error",
-    "serial",
-    "dev"
-  ].includes(command);
+  return command !== "openLogs" && qc1Commands.includes(command as typeof qc1Commands[number]);
 }
 
 /**
@@ -366,25 +373,23 @@ function isAllowedQc1Command(command: string): boolean {
  */
 export function getQc1Status(context: vscode.ExtensionContext): Qc1Status {
   const workspaceRoot = getWorkspaceRoot() || "";
-  const config = vscode.workspace.getConfiguration("qc1", workspaceRoot ? vscode.Uri.file(workspaceRoot) : undefined);
-
-  const configuredProjectPath = (config.get<string>("projectPath") || "").trim();
+  const configuredProjectPath = vscode.workspace.getConfiguration("qc1").get<string>("projectPath", "").trim();
+  const requestedProjectPath = configuredProjectPath
+    ? resolveConfiguredProjectPath(configuredProjectPath, workspaceRoot || process.cwd()) : "";
+  const config = vscode.workspace.getConfiguration("qc1", requestedProjectPath || workspaceRoot ? vscode.Uri.file(requestedProjectPath || workspaceRoot) : undefined);
   const autoDetectProject = config.get<boolean>("autoDetectProject", true);
   const configuredCmakePath = getExistingSettingPath(config, "cmakePath");
   const compilerPathSetting = getExistingSettingPath(config, "compilerPath");
   const openocdPathSetting = getExistingSettingPath(config, "openocdPath");
-  const requestedProjectPath = workspaceRoot
-    ? resolveConfiguredProjectPath(configuredProjectPath, workspaceRoot)
-    : configuredProjectPath;
   const workspaceRoots = [...new Set([requestedProjectPath, ...(vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath)].filter(Boolean))];
   const detectedProject = !configuredProjectPath && autoDetectProject
     ? workspaceRoots.map(root => discoverProject(root)).find(Boolean)
     : null;
   const projectInspection = detectedProject || (requestedProjectPath
-    ? inspectStm32Project(requestedProjectPath)
+    ? inspectProjectCached(requestedProjectPath)
     : inspectStm32Project(""));
   const projectPath = projectInspection.root;
-  const architecture = projectInspection.architecture;
+  const architecture: Qc1TargetArchitecture = { ...projectInspection.architecture, cm7: { ...projectInspection.architecture.cm7 }, cm4: { ...projectInspection.architecture.cm4 } };
   const projectOk = Boolean(projectPath) && fileExists(projectPath) && projectInspection.layout !== "unknown";
   const corePath = projectInspection.corePath;
   const driversPath = projectInspection.driversPath;
@@ -412,18 +417,20 @@ export function getQc1Status(context: vscode.ExtensionContext): Qc1Status {
   const outputName = nativeCmakeOk ? projectInspection.projectName : "firmware";
   const fileApi = nativeCmakeOk ? readFileApi(buildPath, projectPath) : undefined;
   const targets = fileApi?.targets.filter(t => t.type === "EXECUTABLE" && (!t.configuration || t.configuration === buildType)) || [];
+  const coreMetadata = architecture.family === "stm32h755" ? readCoreBuildMetadata(projectPath, buildPath, buildType) : undefined;
+  if (coreMetadata) applyCoreBuildMetadata(architecture, coreMetadata);
   const configuredElf = config.get<string>("elfPath", "");
   const configuredCm7Elf = config.get<string>("cm7ElfPath", "");
   const configuredCm4Elf = config.get<string>("cm4ElfPath", "");
-  const cm7ElfPath = configuredCm7Elf ? resolveUserPath(configuredCm7Elf, projectPath) : configuredCoreArtifact(targets, architecture, "cm7");
-  const cm4ElfPath = configuredCm4Elf ? resolveUserPath(configuredCm4Elf, projectPath) : configuredCoreArtifact(targets, architecture, "cm4");
+  const cm7ElfPath = coreMetadata ? configuredCoreArtifact(coreMetadata, "cm7", configuredCm7Elf ? resolveUserPath(configuredCm7Elf, projectPath) : "") : "";
+  const cm4ElfPath = coreMetadata ? configuredCoreArtifact(coreMetadata, "cm4", configuredCm4Elf ? resolveUserPath(configuredCm4Elf, projectPath) : "") : "";
   const defaultElfPath = targets.length === 1 && targets[0].artifacts.length === 1 ? targets[0].artifacts[0] : buildPath ? path.join(buildPath, `${outputName}.elf`) : "";
   const elfPath = configuredElf ? resolveUserPath(configuredElf, projectPath) : architecture.family === "stm32h755" ? (cm7ElfPath || cm4ElfPath) : defaultElfPath;
   const binPath = binaryForElf(elfPath, buildPath, outputName);
-  const cm7TargetName = targets.find((target) => targetMatchesCore(target, "cm7"))?.name || architecture.cm7.targetName;
-  const cm4TargetName = targets.find((target) => targetMatchesCore(target, "cm4"))?.name || architecture.cm4.targetName;
-  const cm7BinPath = binaryForElf(cm7ElfPath, buildPath, cm7TargetName || "firmware_CM7");
-  const cm4BinPath = binaryForElf(cm4ElfPath, buildPath, cm4TargetName || "firmware_CM4");
+  const cm7TargetName = coreMetadata && configuredCoreTarget(coreMetadata.buildTargets, "cm7") || architecture.cm7.targetName;
+  const cm4TargetName = coreMetadata && configuredCoreTarget(coreMetadata.buildTargets, "cm4") || architecture.cm4.targetName;
+  const cm7BinPath = cm7ElfPath ? binaryForElf(cm7ElfPath, buildPath, cm7TargetName) : "";
+  const cm4BinPath = cm4ElfPath ? binaryForElf(cm4ElfPath, buildPath, cm4TargetName) : "";
   const pathCmake = findExecutable(os.platform() === "win32" ? "cmake.exe" : "cmake");
   const cmakePath = configuredCmakePath || embeddedCmakePath || pathCmake || "";
   const cmakeSource = configuredCmakePath ? "setting" : embeddedCmakePath ? "extension" : pathCmake ? "PATH" : "introuvable";
@@ -450,9 +457,9 @@ export function getQc1Status(context: vscode.ExtensionContext): Qc1Status {
   const serialPort = findSerialPort((config.get<string>("serialPort") || "").trim());
   const baudRate = config.get<number>("baudRate", 19200);
   const h755Cores = [architecture.cm7, architecture.cm4].filter((core) => core.present);
-  const h755Complete = architecture.family === "stm32h755" && h755Cores.length > 0 && h755Cores.every((core) =>
-    Boolean(core.cmakePath && core.startupPath && core.linkerScriptPath),
-  ) && Boolean(architecture.halPath && architecture.cmsisPath && architecture.cmsisDevicePath);
+  // Native CMake owns generated/external dependencies, just as for F1. Static
+  // absence of a CubeMX folder must not reject a manual H755 project.
+  const h755Complete = architecture.family === "stm32h755" && h755Cores.length > 0;
   const projectComplete = projectOk && cmakeProjectReady && (architecture.family === "stm32h755"
     ? nativeCmakeOk && h755Complete
     : nativeCmakeOk || (sourceOk && startupOk && linkerScriptOk));
@@ -660,18 +667,30 @@ export function getProjectDiagnostics(status: Qc1Status): Qc1DiagnosticInfo[] {
     for (const core of [status.architecture.cm7, status.architecture.cm4]) {
       if (!core.present) continue;
       const label = core.core.toUpperCase();
-      if (!core.cmakePath) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "002" : "003"}`, level: "error", title: `CMAKE_${label}_INTROUVABLE`, message: `CMake ${label} introuvable`, cause: `Le firmware ${label} doit rester une cible CubeMX distincte`, checkedPath: core.directory || status.projectPath });
-      if (!core.startupPath) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "004" : "005"}`, level: "error", title: `STARTUP_${label}_INTROUVABLE`, message: `Startup ${label} absent ou ambigu`, cause: `Aucun startup H755 attribuable sans ambiguïté à ${label}`, checkedPath: core.directory || status.projectPath });
-      if (!core.linkerScriptPath) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "006" : "007"}`, level: "error", title: `LINKER_${label}_INTROUVABLE`, message: `Linker ${label} absent ou ambigu`, cause: `Les memory maps CubeMX ${label} doivent rester distinctes`, checkedPath: core.directory || status.projectPath });
+      const structuralLevel = status.nativeCmakeOk ? "warning" : "error";
+      if (!core.cmakePath) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "002" : "003"}`, level: structuralLevel, title: `CMAKE_${label}_INTROUVABLE`, message: `CMake ${label} non résolu séparément`, cause: `Le CMake racine peut déclarer les cibles ${label}; QC1 ne crée pas de sous-projet`, checkedPath: core.directory || status.projectPath });
+      if (!core.startupPath) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "004" : "005"}`, level: structuralLevel, title: `STARTUP_${label}_INTROUVABLE`, message: `Startup ${label} absent ou ambigu`, cause: `CMake peut fournir ou générer le startup; aucune sélection arbitraire pour ${label}`, checkedPath: core.directory || status.projectPath });
+      if (!core.linkerScriptPath) diagnostics.push(core.linkerCandidates.length ? {
+        code: `QC1-H755-${core.core === "cm7" ? "006" : "007"}`, level: "warning", title: `LINKER_${label}_SELECTION_UNRESOLVED`,
+        message: `Scripts linker ${label} détectés; sélection active non confirmée`,
+        cause: `Plusieurs scripts linker ${label} existent; la sélection active n'a pas pu être confirmée statiquement.`,
+        checkedPath: core.linkerCandidates[0]
+      } : {
+        code: `QC1-H755-${core.core === "cm7" ? "006" : "007"}`, level: structuralLevel, title: `LINKER_${label}_INTROUVABLE`,
+        message: `Linker ${label} absent`, cause: `Aucun script linker attribuable à ${label} n'a été trouvé`,
+        checkedPath: core.directory || status.projectPath
+      });
       if (!core.targetName) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "008" : "009"}`, level: "warning", title: `TARGET_${label}_NON_RESOLUE`, message: `Nom de cible CMake ${label} non résolu`, cause: "Le build global reste disponible; configure le projet une fois pour alimenter la CMake File API", checkedPath: core.cmakePath || status.projectPath });
-      if (core.missingFlags.length) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "016" : "017"}`, level: "warning", title: `FLAGS_${label}_NON_CONFIRMES`, message: `Flags ${label} non confirmés: ${core.missingFlags.join(" ")}`, cause: "QC1 respecte CMake et signale seulement ce que l'analyse statique ne confirme pas", checkedPath: core.cmakePath || status.projectPath });
+      if (core.missingFlags.length) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "016" : "017"}`, level: "warning", title: `FLAGS_${label}_NON_CONFIRMES`, message: `Options ${label} non explicites dans les commandes de compilation: ${core.missingFlags.join(" ")}`, cause: core.missingFlags.includes("-mthumb") ? "GCC peut activer Thumb implicitement avec -mcpu=cortex-m; confirmer le mode effectif avec le compilateur ciblé." : "Les options CPU attendues ne sont pas confirmées par les commandes CMake.", checkedPath: core.cmakePath || status.projectPath });
       if (core.missingDefines.length) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "018" : "019"}`, level: "warning", title: `DEFINES_${label}_NON_CONFIRMES`, message: `Defines ${label} non confirmés: ${core.missingDefines.join(" ")}`, cause: "CORE_CMx et STM32H755xx doivent provenir du CMake CubeMX", checkedPath: core.cmakePath || status.projectPath });
     }
-    for (const [code, title, message, checked] of [
-      ["QC1-H755-010", "HAL_H7_INTROUVABLE", "HAL STM32H7 absent", status.architecture.halPath || path.join(status.driversPath, "STM32H7xx_HAL_Driver")],
-      ["QC1-H755-011", "CMSIS_INTROUVABLE", "CMSIS absent", status.architecture.cmsisPath || path.join(status.driversPath, "CMSIS")],
-      ["QC1-H755-012", "CMSIS_DEVICE_H7_INTROUVABLE", "CMSIS Device STM32H7 absent", status.architecture.cmsisDevicePath || path.join(status.driversPath, "CMSIS", "Device", "ST", "STM32H7xx")]
-    ] as const) if (!fileExists(checked)) diagnostics.push({ code, level: "error", title, message, cause: "Composant requis par le projet CubeMX H755", checkedPath: checked });
+    const cmake = inspectProjectCached(status.projectPath).cmake;
+    const dependencyReferences = [...cmake.sources, ...cmake.includes, ...cmake.definitions].join("\n");
+    for (const [code, title, message, checked, referenced] of [
+      ["QC1-H755-010", "HAL_H7_INTROUVABLE", "HAL STM32H7 absent", status.architecture.halPath || path.join(status.driversPath, "STM32H7xx_HAL_Driver"), /STM32H7xx_HAL_Driver|USE_HAL_DRIVER/i.test(dependencyReferences)],
+      ["QC1-H755-011", "CMSIS_INTROUVABLE", "CMSIS absent", status.architecture.cmsisPath || path.join(status.driversPath, "CMSIS"), /[\\/]CMSIS(?:[\\/]|$)/i.test(dependencyReferences)],
+      ["QC1-H755-012", "CMSIS_DEVICE_H7_INTROUVABLE", "CMSIS Device STM32H7 absent", status.architecture.cmsisDevicePath || path.join(status.driversPath, "CMSIS", "Device", "ST", "STM32H7xx"), /CMSIS[\\/].*Device[\\/].*STM32H7/i.test(dependencyReferences)]
+    ] as const) if (referenced && !fileExists(checked)) diagnostics.push({ code, level: "warning", title, message, cause: "Dépendance référencée par CMake mais non confirmée localement; elle peut être fournie ailleurs. Le build vérifie ses dépendances", checkedPath: checked });
     if (status.architecture.bspRequired && !status.architecture.bspPath) diagnostics.push({
       code: "QC1-H755-013", level: "warning", title: "BSP_NUCLEO_H7_INTROUVABLE", message: "BSP NUCLEO H7 référencé mais absent",
       cause: "Le BSP est optionnel pour un H755 générique et requis seulement lorsqu'il est utilisé", checkedPath: path.join(status.driversPath, "BSP", "STM32H7xx_Nucleo")
@@ -758,6 +777,14 @@ function getToolDiagnostic(status: Qc1Status, command: string): Qc1DiagnosticInf
     };
   }
 
+  if (!status.openocdOk && status.architecture.family === "stm32h755" && ["flash", "run"].includes(action)) {
+    return {
+      code: "QC1-TOOL-005", level: "error", title: "OPENOCD_INTROUVABLE",
+      message: "OpenOCD requis pour le flash H755",
+      cause: "Le flash H755 sélectionne explicitement cpu0 ou cpu1; st-flash ne permet pas cette sélection QC1",
+      checkedPath: status.openocdPath || "PATH"
+    };
+  }
   if (!status.openocdOk && !status.stFlashOk && ["flash", "run"].includes(action)) {
     return {
       code: "QC1-TOOL-003",
@@ -800,11 +827,7 @@ function getToolDiagnostic(status: Qc1Status, command: string): Qc1DiagnosticInf
     code: "QC1-H755-014", level: "error", title: "COEUR_NON_DISPONIBLE", message: `${core.toUpperCase()} n'est pas présent`,
     cause: "Ce projet H755 est valide sans l'autre cœur, mais la commande demandée cible un firmware absent", checkedPath: status.projectPath
   };
-  if (core && !(core === "cm7" ? status.cm7TargetName : status.cm4TargetName)) return {
-    code: "QC1-H755-015", level: "error", title: "TARGET_CMAKE_NON_RESOLUE", message: `Cible CMake ${core.toUpperCase()} non résolue`,
-    cause: "QC1 refuse de remplacer silencieusement un build par cœur par un build global; configure le preset/CMake ou précise une cible identifiable",
-    checkedPath: status.architecture[core].cmakePath || status.projectPath
-  };
+
 
   return undefined;
 }
@@ -826,7 +849,7 @@ function createQc1ErrorFromDiagnostic(
   });
 }
 
-function createQc1ErrorFromProcess(
+export function createQc1ErrorFromProcess(
   error: unknown,
   command: string,
   cwd: string,
@@ -881,24 +904,27 @@ function quoteArg(arg: string): string {
 }
 
 /** Ajoute les dossiers des outils détectés devant le PATH sans supprimer le PATH existant. */
-function getExecutionEnv(status: Qc1Status): NodeJS.ProcessEnv {
-  const toolDirectories = [
-    status.cmakeOk ? path.dirname(status.cmakePath) : "",
-    status.ninjaOk ? path.dirname(status.ninjaPath) : "",
-    status.compilerOk ? path.dirname(status.compilerPath) : "",
-    status.gdbOk ? path.dirname(status.gdbPath) : "",
-    status.openocdOk ? path.dirname(status.openocdPath) : "",
-    status.stFlashOk ? path.dirname(status.stFlashPath) : "",
-    status.stlinkToolOk ? path.dirname(status.stlinkPath) : ""
-  ].filter(Boolean);
-  const environment = { ...process.env };
-  const pathKey = Object.keys(environment).find(key => os.platform() === "win32" ? key.toUpperCase() === "PATH" : key === "PATH") || "PATH";
-  const currentPath = environment[pathKey] || "";
-  delete environment[pathKey];
-  return {
-    ...environment,
-    PATH: [...new Set(toolDirectories), currentPath].filter(Boolean).join(path.delimiter)
-  };
+export function getExecutionEnv(status: Qc1Status): NodeJS.ProcessEnv {
+  return buildToolEnvironment([
+    status.cmakeOk ? status.cmakePath : "",
+    status.ninjaOk ? status.ninjaPath : "",
+    status.compilerOk ? status.compilerPath : "",
+    status.gdbOk ? status.gdbPath : "",
+    status.openocdOk ? status.openocdPath : "",
+    status.stFlashOk ? status.stFlashPath : "",
+    status.stlinkToolOk ? status.stlinkPath : ""
+  ]);
+}
+
+function runStlinkProbe(status: Qc1Status): ReturnType<typeof probeStlink> {
+  if (!vscode.workspace.isTrusted) return Promise.resolve({ exitCode: null, stdout: "", stderr: "Workspace non approuvé", status: "non testé" });
+  return probeStlink({ family: status.architecture.family, dualCore: needsBothH755Targets(status.architecture),
+    openocd: status.openocdOk ? status.openocdPath : undefined, stInfo: status.stlinkToolOk ? status.stlinkPath : undefined,
+    cwd: status.projectPath || getWorkspaceRoot(), env: getExecutionEnv(status) });
+}
+
+function needsBothH755Targets(architecture: Qc1TargetArchitecture): boolean {
+  return architecture.family === "stm32h755" && (architecture.coreMode === "dual" || architecture.coreMode === "cm4");
 }
 
 // === COLLECTE DU RAPPORT DE DIAGNOSTIC =====================================
@@ -1048,7 +1074,7 @@ function startOpenOcdTerminal(context: vscode.ExtensionContext): void {
   const terminal = vscode.window.createTerminal({
     name: "QC1 OpenOCD",
     shellPath: status.openocdPath,
-    shellArgs: getOpenOcdServerArgs(status.architecture.family, status.architecture.coreMode === "dual"),
+    shellArgs: getOpenOcdServerArgs(status.architecture.family, needsBothH755Targets(status.architecture)),
     env: getExecutionEnv(status)
   });
   terminal.show();
@@ -1119,7 +1145,7 @@ export function buildProcessInvocations(status: Qc1Status, command: string): Pro
     ? ["--build", "--preset", status.cmakeBuildPreset, "--parallel"]
     : ["--build", status.buildPath, "--config", buildType, "--parallel"];
   const coreTarget = core ? (core === "cm7" ? status.cm7TargetName : status.cm4TargetName) : "";
-  if (core && coreTarget) buildArgs.push("--target", coreTarget);
+  if (core && resolvedTargetName(coreTarget)) buildArgs.push("--target", coreTarget);
 
   if (["clean", "rebuild"].includes(action)) {
     invocations.push({
@@ -1150,6 +1176,8 @@ export function buildProcessInvocations(status: Qc1Status, command: string): Pro
     ? core ? [core] : [status.architecture.cm7.present ? "cm7" : undefined, status.architecture.cm4.present ? "cm4" : undefined].filter((value): value is Qc1Core => Boolean(value))
     : [undefined];
 
+  if (status.architecture.family === "stm32h755" && !status.openocdOk)
+    throw new Error("OpenOCD requis pour sélectionner cpu0/cpu1 avant le flash H755.");
   if (status.openocdOk) {
     for (const targetCore of cores) {
       const elf = targetCore === "cm7" ? status.cm7ElfPath : targetCore === "cm4" ? status.cm4ElfPath : status.elfPath;
@@ -1157,7 +1185,7 @@ export function buildProcessInvocations(status: Qc1Status, command: string): Pro
         phase: "flashing",
         label: `Flash ${targetCore?.toUpperCase() || "STM32"} avec OpenOCD`,
         executable: status.openocdPath,
-        args: getOpenOcdProgramArgs(elf, status.architecture.family, status.architecture.coreMode === "dual", targetCore),
+        args: getOpenOcdProgramArgs(elf, status.architecture.family, needsBothH755Targets(status.architecture), targetCore),
         core: targetCore,
         inputArtifact: "elf"
       });
@@ -1200,8 +1228,9 @@ function runSpawnedProcess(
 ): Promise<SpawnedProcessResult> {
   const command = formatInvocation(invocation.executable, invocation.args);
   if (!vscode.workspace.isTrusted) return Promise.resolve({ exitCode: null, stdout: "", stderr: "Workspace non approuvé", command, timedOut: false, error: new Error("Workspace non approuvé") });
-  return runProcess(invocation.executable, invocation.args, { cwd, env, timeoutMs: 120000, maxBytes: 512 * 1024, onStdout, onStderr }).then(result => ({
-    ...result, command, error: result.exitCode === 0 && !result.error ? undefined : Object.assign(new Error(result.error || result.stderr || "Processus échoué"), { code: result.exitCode, killed: result.timedOut })
+  const timeoutMs = invocation.phase === "building" ? 600000 : 120000;
+  return runProcess(invocation.executable, invocation.args, { cwd, env, timeoutMs, maxBytes: 512 * 1024, onStdout, onStderr }).then(result => ({
+    ...result, command, error: processSucceeded(result) ? undefined : Object.assign(new Error(result.error || result.stderr || "Processus échoué"), { code: result.exitCode, killed: result.timedOut, timedOut: result.timedOut })
   }));
 }
 
@@ -1210,7 +1239,7 @@ function runSpawnedProcess(
 /** Remplace le HTML complet par un nouveau rendu du `dashboardState`. */
 function refreshDashboard() {
   if (dashboardPanel) {
-    dashboardPanel.webview.html = getDashboardHtml(dashboardState);
+    void dashboardPanel.webview.postMessage({ type: "dashboardState", state: dashboardState, views: renderDashboardViews(dashboardState) });
   }
 }
 
@@ -1228,6 +1257,8 @@ function syncDashboardState(context: vscode.ExtensionContext) {
 
   dashboardState = {
     ...dashboardState,
+    tools: normalizeTools(status, vscode.extensions.getExtension("marus25.cortex-debug")?.packageJSON.version),
+    diagnostics: [...getProjectDiagnostics(status), ...scannerDiagnostics(dashboardState.projectDiscovery.activeCandidate)],
     projectName: projectRoot ? path.basename(projectRoot) : "--",
     project: {
       workspaceOpened: status.projectOk,
@@ -1275,6 +1306,8 @@ function syncDashboardState(context: vscode.ExtensionContext) {
       stlinkDetected: status.stlinkProbeOk,
       stFlashInstalled: status.stFlashOk,
       stlinkProbeStatus: status.stlinkProbeStatus,
+      stlinkModel: stlinkProbeModel,
+      stlinkCheckedAt,
       cmakeDetected: status.cmakeOk
     },
     diagnostic: {
@@ -1289,6 +1322,18 @@ function syncDashboardState(context: vscode.ExtensionContext) {
   };
 }
 
+function scannerDiagnostics(candidate?: ProjectCandidate): DashboardState["diagnostics"] {
+  if (!candidate) return [];
+  return [...candidate.missingComponents.map((missing, index) => ({
+    code: `QC1-SCANNER-${missing.component}-${index}`, level: missing.severity === "error" ? "error" as const : "warning" as const,
+    title: `${missing.component} requis / incomplet`, message: missing.message, cause: "Analyse statique du projet actif",
+    checkedPath: missing.referencedBy || missing.expectedPath || candidate.path,
+  })), ...candidate.warnings.map((warning) => ({
+    code: warning.code, level: warning.severity === "error" ? "error" as const : "warning" as const,
+    title: warning.code, message: warning.message, cause: "Preuves statiques à vérifier", checkedPath: warning.file || candidate.path,
+  }))];
+}
+
 // === CONTRÔLEUR DE LA WEBVIEW QC1 ==========================================
 
 /**
@@ -1299,6 +1344,19 @@ function syncDashboardState(context: vscode.ExtensionContext) {
 export class QC1PanelProvider implements vscode.WebviewViewProvider {
   private buildRunning = false;
   private reportRunning = false;
+  private probeRunning = false;
+  private disposed = false;
+  private initialized = false;
+  private settingsUpdating = 0;
+  private selectionGeneration = 0;
+  private artifactGeneration = 0;
+  private contextGeneration = 0;
+  private refreshTimer?: ReturnType<typeof setTimeout>;
+  private readonly disposables: vscode.Disposable[] = [];
+  private watchers: vscode.Disposable[] = [];
+  private readonly discovery: ProjectDiscoveryController;
+  private readonly recent: RecentProjectsController;
+  private readonly configuration: ProjectConfigurationController;
   public static readonly viewType = "qc1.panel";
   private view?: vscode.WebviewView;
   private outputLines: string[] = [];
@@ -1306,7 +1364,133 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly context: vscode.ExtensionContext
-  ) {}
+  ) {
+    this.configuration = new ProjectConfigurationController({
+      hasWorkspace: () => Boolean(vscode.workspace.workspaceFolders?.length || vscode.workspace.workspaceFile),
+      update: (key, value, target) => {
+        if (this.buildRunning) throw new Error("Impossible de changer les réglages pendant une opération QC1.");
+        const windowSetting = ["projectPath", "autoDiscoverProjects", "discoveryRoots"].includes(key);
+        const config = windowSetting ? vscode.workspace.getConfiguration("qc1") : qc1Configuration();
+        const existingFolderOverride = !windowSetting && target === "workspace" && config.inspect(key)?.workspaceFolderValue !== undefined;
+        return config.update(key, value, existingFolderOverride ? vscode.ConfigurationTarget.WorkspaceFolder : target === "workspace" ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
+      },
+    });
+    this.recent = new RecentProjectsController({
+      read: () => this.context.globalState.get<string[]>("qc1.recentProjectPaths", []),
+      write: (paths) => this.context.globalState.update("qc1.recentProjectPaths", paths),
+    });
+    this.discovery = new ProjectDiscoveryController((state) => {
+      dashboardState = { ...dashboardState, projectDiscovery: { ...state, candidates: mapProjectCandidates(state.candidates) } };
+      if (state.activeCandidate?.path === state.selectedPath) {
+        dashboardState = { ...dashboardState, diagnostics: [
+          ...dashboardState.diagnostics.filter((diagnostic) => !diagnostic.code.startsWith("QC1-SCANNER-") && !diagnostic.code.startsWith("QC1-SCAN-")),
+          ...scannerDiagnostics(state.activeCandidate),
+        ] };
+      }
+      this.publishProjectDiscovery();
+      if (state.status === "success") {
+        this.recent.cacheMetadata([...state.candidates, ...(state.activeCandidate ? [state.activeCandidate] : [])]);
+        void this.refreshRecentProjects().catch((error) => outputChannel?.appendLine(`[QC1] Historique: ${String(error)}`));
+      }
+    }, {
+      analyze: analyzeProject,
+      discover: async (options) => await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Détection STM32", cancellable: true }, async (_progress, token) => {
+        const subscription = token.onCancellationRequested(() => {
+          // Cancelling an obsolete notification must not cancel the newer scan.
+          if (!options.signal?.aborted) this.discovery.cancel();
+        });
+        try { return await discoverProjects(options); }
+        finally { subscription.dispose(); }
+      }),
+    });
+  }
+
+  public initializeManager(): void {
+    if (this.initialized || this.disposed) return;
+    this.initialized = true;
+    this.disposables.push(vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("qc1")) this.scheduleContextRefresh();
+    }), vscode.workspace.onDidChangeWorkspaceFolders(() => this.scheduleContextRefresh(true)));
+    void this.refreshManagerContext(true).catch((error) => outputChannel?.appendLine(`[QC1] Projet: ${String(error)}`));
+  }
+
+  private scheduleContextRefresh(clearResults = false): void {
+    projectCache.clear();
+    ++this.contextGeneration;
+    this.discovery.invalidate(clearResults);
+    clearTimeout(this.refreshTimer);
+    this.refreshTimer = setTimeout(() => {
+      if (!this.settingsUpdating && !this.disposed) void this.refreshManagerContext(true).catch((error) => outputChannel?.appendLine(`[QC1] Projet: ${String(error)}`));
+    }, 150);
+  }
+
+  private async refreshManagerContext(allowAutomaticScan = false): Promise<void> {
+    if (this.disposed) return;
+    const id = ++this.contextGeneration;
+    const status = getQc1Status(this.context);
+    const changed = this.discovery.snapshot.selectedPath !== status.projectPath;
+    if (changed) {
+      dashboardState = { ...dashboardState, build: { ...defaultDashboardState.build }, flash: { ...defaultDashboardState.flash }, artifacts: [] };
+      this.discovery.setSelectedPath(status.projectPath);
+      this.watchProject(status.projectPath);
+    }
+    syncDashboardState(this.context);
+    this.sendSettings();
+    this.sendDashboardState();
+    const requestId = this.discovery.requestId;
+    await this.refreshRecentProjects();
+    if (this.disposed || id !== this.contextGeneration || status.projectPath !== getQc1Status(this.context).projectPath) return;
+    if (requestId !== this.discovery.requestId) return;
+    if (allowAutomaticScan && qc1Configuration().get<boolean>("autoDiscoverProjects", false))
+      await this.discovery.scan(this.discoveryRoots());
+    else await this.discovery.refreshActive();
+    if (this.disposed || id !== this.contextGeneration) return;
+    await this.refreshArtifacts();
+  }
+
+  private watchProject(root: string): void {
+    this.watchers.forEach((watcher) => watcher.dispose());
+    this.watchers = [];
+    if (!root) return;
+    for (const glob of ["**/Makefile", "**/CMakeLists.txt", "**/*.ld", "**/startup_stm32*.{s,S}", "**/*.ioc", "CMakePresets.json", "**/*.cmake"]) {
+      const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, glob));
+      const changed = (uri: vscode.Uri): void => {
+        if (/[\\/](?:build|out|dist|node_modules|\.git)[\\/]/i.test(uri.fsPath)) return;
+        projectCache.clear();
+        this.discovery.markStale();
+      };
+      this.watchers.push(watcher, watcher.onDidChange(changed), watcher.onDidCreate(changed), watcher.onDidDelete(changed));
+    }
+  }
+
+  private async refreshRecentProjects(): Promise<void> {
+    const recentProjects = await this.recent.load();
+    if (this.disposed) return;
+    dashboardState = { ...dashboardState, recentProjects };
+    this.publishProjectDiscovery();
+  }
+
+  private async refreshArtifacts(): Promise<void> {
+    const id = ++this.artifactGeneration;
+    const status = getQc1Status(this.context);
+    const artifacts = await collectProjectArtifacts(status.buildPath, [
+      { path: status.elfPath }, { path: status.binPath },
+      { path: status.cm7ElfPath, core: "CM7" }, { path: status.cm4ElfPath, core: "CM4" },
+    ]);
+    if (this.disposed || id !== this.artifactGeneration || status.projectPath !== getQc1Status(this.context).projectPath) return;
+    dashboardState = { ...dashboardState, artifacts };
+    this.sendDashboardState();
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    clearTimeout(this.refreshTimer);
+    this.discovery.dispose();
+    this.watchers.forEach((watcher) => watcher.dispose());
+    this.disposables.forEach((disposable) => disposable.dispose());
+    if (dashboardPanel === this.view) dashboardPanel = undefined;
+    this.view = undefined;
+  }
 
   /** Appelé par VS Code lorsque la barre latérale QC1 doit être créée. */
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -1321,11 +1505,9 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = getDashboardHtml(dashboardState);
 
     // Routeur Webview -> extension. Chaque `msg.type` provient d'un postMessage du HTML.
-    webviewView.webview.onDidReceiveMessage(async (message: unknown) => {
-      if (!message || typeof message !== "object") return;
-      const raw = message as Record<string, unknown>;
-      if (typeof raw.type !== "string") return;
-      const msg = { type: raw.type, command: typeof raw.command === "string" ? raw.command : "" };
+    this.disposables.push(webviewView.webview.onDidReceiveMessage(async (message: unknown) => {
+      const msg = parseWebviewMessage(message);
+      if (!msg || this.disposed) return;
       try {
       switch (msg.type) {
         case "command":
@@ -1373,6 +1555,8 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
           break;
 
         case "refreshTools":
+          projectCache.clear();
+          syncDashboardState(this.context);
           this.sendToolsStatus();
           break;
 
@@ -1380,6 +1564,61 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
           await this.autoDetectPaths();
           break;
 
+        case "discoverProjects":
+          await this.discovery.scan(this.discoveryRoots());
+          break;
+        case "rescanProjects":
+          projectCache.clear();
+          await this.discovery.rescan();
+          syncDashboardState(this.context);
+          await this.refreshArtifacts();
+          this.sendDashboardState();
+          break;
+        case "cancelProjectScan":
+          this.discovery.cancel();
+          break;
+
+        case "chooseProjectFolder":
+          await this.chooseProjectFolder();
+          break;
+
+        case "useProject": {
+          const candidate = dashboardState.projectDiscovery.candidates
+            .map((item) => item.candidate)
+            .find((item) => item.path === msg.projectPath);
+          if (candidate) await this.selectProject(candidate);
+          break;
+        }
+
+        case "updateProjectSettings":
+          await this.updateProjectSettings(msg);
+          break;
+        case "useRecentProject":
+          if (this.recent.paths().includes(msg.projectPath)) await this.selectProjectPath(msg.projectPath);
+          break;
+        case "removeRecentProject":
+          await this.recent.remove(msg.projectPath);
+          await this.refreshRecentProjects();
+          break;
+        case "detectStlink": this.detectStlink(); break;
+        case "openSerial": this.openSerial(); break;
+        case "startOpenOcd": this.startOpenOcd(); break;
+        case "openArtifact": {
+          const artifact = dashboardState.artifacts.find((item) => item.id === msg.id);
+          if (artifact && fileExists(artifact.path)) await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(artifact.path));
+          break;
+        }
+        case "openDiagnosticFile": {
+          const diagnostic = dashboardState.diagnostics[msg.index];
+          if (diagnostic && diagnostic.checkedPath !== "--") {
+            try {
+              const stat = await fs.promises.stat(diagnostic.checkedPath);
+              if (stat.isFile()) await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.file(diagnostic.checkedPath)));
+              else if (stat.isDirectory()) await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(diagnostic.checkedPath));
+            } catch { this.postStatus("Chemin absent ou inaccessible", "error"); }
+          }
+          break;
+        }
         case "copyDiagnostic":
           await vscode.env.clipboard.writeText(formatDiagnostic(getQc1Status(this.context)));
           this.postStatus("Diagnostic copied", "success");
@@ -1401,7 +1640,7 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
         outputChannel?.appendLine(`[QC1] Action échouée: ${String(error)}`);
         this.postStatus("Action QC1 échouée", "error");
       }
-    });
+    }));
 
     this.sendSettings();
     this.sendToolsStatus();
@@ -1420,7 +1659,9 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
     });
     syncDashboardState(this.context);
     refreshDashboard();
+    this.publishProjectDiscovery();
     this.postStatus("Ready", "idle");
+    this.initializeManager();
   }
 
   /** Regroupe les réglages exposés à l'onglet Paramètres de la Webview. */
@@ -1432,10 +1673,14 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
       os: getOsLabel(process.platform),
       osRaw: process.platform,
       extensionVersion: this.context.extension.packageJSON.version || defaultDashboardState.environment.extensionVersion,
-      projectPath: config.get<string>("projectPath", ""),
+      projectPath: vscode.workspace.getConfiguration("qc1").get<string>("projectPath", ""),
+      configurationScope: projectWriteTarget(Boolean(vscode.workspace.workspaceFolders?.length || vscode.workspace.workspaceFile)) === "workspace" ? "Workspace (projet interne ou externe)" : "User (fenêtre sans workspace)",
+      autoDiscoverProjects: config.get<boolean>("autoDiscoverProjects", false),
+      discoveryRoots: config.get<string[]>("discoveryRoots", []),
       cmakePath: config.get<string>("cmakePath", ""),
       buildDirectory: config.get<string>("buildDirectory", "build/qc1"),
       buildType: config.get<string>("buildType", "Debug"),
+      cmakePreset: config.get<string>("cmakePreset", ""),
       compilerPath: config.get<string>("compilerPath", ""),
       openocdPath: config.get<string>("openocdPath", ""),
       serialPort: config.get<string>("serialPort", ""),
@@ -1457,17 +1702,19 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
 
   /** Écrit les chemins auto-détectés dans les réglages du workspace. */
   private async autoDetectPaths() {
+    if (this.buildRunning) throw new Error("Attendez la fin de l'opération QC1.");
     const config = qc1Configuration();
     const status = getQc1Status(this.context);
     const updates: Thenable<void>[] = [];
 
-    updates.push(config.update("projectPath", status.projectOk ? status.projectPath : "", vscode.ConfigurationTarget.Workspace));
-    updates.push(config.update("cmakePath", status.cmakeOk && status.cmakeSource === "PATH" ? status.cmakePath : "", vscode.ConfigurationTarget.Workspace));
-    updates.push(config.update("compilerPath", status.compilerOk && status.compilerSource === "PATH" ? status.compilerPath : "", vscode.ConfigurationTarget.Workspace));
-    updates.push(config.update("openocdPath", status.openocdOk && status.openocdSource === "PATH" ? status.openocdPath : "", vscode.ConfigurationTarget.Workspace));
-    updates.push(config.update("stlinkPath", status.stlinkToolOk ? status.stlinkPath : "st-info", vscode.ConfigurationTarget.Workspace));
+    await this.configuration.update({ projectPath: status.projectOk ? status.projectPath : "" });
+    const target = vscode.workspace.workspaceFolders?.length || vscode.workspace.workspaceFile ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
+    updates.push(config.update("cmakePath", status.cmakeOk && status.cmakeSource === "PATH" ? status.cmakePath : "", target));
+    updates.push(config.update("compilerPath", status.compilerOk && status.compilerSource === "PATH" ? status.compilerPath : "", target));
+    updates.push(config.update("openocdPath", status.openocdOk && status.openocdSource === "PATH" ? status.openocdPath : "", target));
+    updates.push(config.update("stlinkPath", status.stlinkToolOk ? status.stlinkPath : "st-info", target));
     if (status.serialPort) {
-      updates.push(config.update("serialPort", status.serialPort, vscode.ConfigurationTarget.Workspace));
+      updates.push(config.update("serialPort", status.serialPort, target));
     }
 
     await Promise.all(updates);
@@ -1523,15 +1770,12 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
         const config = qc1Configuration();
         const workspaceFolders = vscode.workspace.workspaceFolders || [];
         const projectRoot = status.projectPath || getWorkspaceRoot() || "";
-        const executionEnvironment = getExecutionEnv(status);
         const collectionErrors: string[] = [];
         const collect = async <T>(name: string, task: () => Promise<T>, fallback: T): Promise<T> => {
           try { return await task(); }
           catch (error) { collectionErrors.push(`${name}: ${String(error)}`); return fallback; }
         };
-        const probePromise = status.stlinkToolOk
-          ? runDiagnosticProcess(status.stlinkPath, ["--probe"], projectRoot || undefined, executionEnvironment)
-          : Promise.resolve<DiagnosticProcessResult>({ exitCode: null, stdout: "", stderr: "st-info introuvable" });
+        const probePromise = runStlinkProbe(status);
         const [tools, gitSnapshot, probe, system, devices] = await Promise.all([
           collect("tools", () => collectDiagnosticToolReports(status), []),
           collect("git", () => collectGitSnapshot(projectRoot), "unknown"),
@@ -1660,6 +1904,7 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
             baudRate: status.baudRate,
             previousStlinkState: status.stlinkProbeStatus,
             stlinkModel: status.stlinkProbeModel,
+            currentProbeStatus: probe.status,
             currentProbeExitCode: probe.exitCode,
             currentProbeOutput: `${probe.stdout}\n${probe.stderr}`.trim() || "--"
           },
@@ -1724,6 +1969,7 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
    * C'est ici qu'il faut enregistrer une nouvelle action envoyée par un bouton.
    */
   public runCommand(command: string): void {
+    if (this.disposed) return;
     if (command === "detect-stlink") {
       this.detectStlink();
       return;
@@ -1744,6 +1990,7 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
       openSerialTerminal(this.context);
       return;
     }
+    if (this.settingsUpdating) { this.postStatus("Enregistrement des réglages en cours", "running"); return; }
     if (this.buildRunning) { this.postStatus("Une opération QC1 est déjà en cours", "running"); return; }
     this.buildRunning = true;
     void this.runQC1(command).catch(error => {
@@ -1766,6 +2013,10 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
 
   /** Exécute un diagnostic et un probe ST-Link sans compiler le firmware. */
   private runStatus(command: string): void {
+    const measuring = command === "detect-stlink";
+    if (measuring && this.buildRunning) { this.postStatus("Attendez la fin de l'opération QC1 avant de détecter ST-Link", "running"); return; }
+    if (measuring && this.probeRunning) { this.postStatus("Détection ST-Link déjà en cours", "running"); return; }
+    projectCache.clear();
     const status = getQc1Status(this.context);
     const config = this.getConfig();
     const cwd = status.projectPath || getWorkspaceRoot() || "--";
@@ -1779,40 +2030,47 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
       currentAction: command === "detect-stlink" ? "Détection ST-Link" : "Diagnostic"
     };
 
-    const finish = (probeOutput: string, probeError?: unknown): void => {
-      if (status.stlinkToolOk) {
+    const finish = (probeOutput: string, probeError?: unknown, measuredStatus?: Qc1Status["stlinkProbeStatus"], probeWarning?: string): void => {
+      if (measuring) this.probeRunning = false;
+      if (this.disposed) return;
+      if (measuring && (status.stlinkToolOk || status.openocdOk) && vscode.workspace.isTrusted) {
         const detected = readStlinkProbeStatus(probeOutput);
-        stlinkProbeStatus = detected;
+        stlinkProbeStatus = measuredStatus || (probeError ? "non testé" : detected);
         stlinkProbeModel = readStlinkProbeModel(probeOutput);
+        stlinkCheckedAt = new Date().toLocaleString();
       }
 
       syncDashboardState(this.context);
       this.appendOutput(formatDiagnostic(getQc1Status(this.context)), "stdout");
-      if (status.stlinkToolOk) {
+      if (measuring && (status.stlinkToolOk || status.openocdOk) && vscode.workspace.isTrusted) {
         this.appendOutput([
           "",
           "Probe ST-Link",
-          `Commande: ${quoteArg(status.stlinkPath)} --probe`,
+          "Méthode: OpenOCD / st-info (voir résultats ci-dessous)",
           `Exit    : ${probeError ? getExitCode(probeError) ?? 1 : 0}`,
           probeOutput.trim() || "--"
         ].join("\n"), probeError ? "error" : "stdout");
-      } else {
-        this.appendOutput("Probe ST-Link non exécuté: st-info introuvable", "error");
+        if (probeWarning) this.appendOutput(probeWarning, "error");
+      } else if (measuring) {
+        stlinkProbeStatus = "non testé";
+        stlinkProbeModel = "--";
+        stlinkCheckedAt = undefined;
+        this.appendOutput(vscode.workspace.isTrusted ? "Probe ST-Link non exécuté: st-info/OpenOCD introuvables" : "Probe ST-Link non exécuté: workspace non approuvé", "error");
       }
       refreshDashboard();
       this.sendToolsStatus();
       this.sendTerminalMeta();
-      this.postStatus(command === "detect-stlink" ? `ST-Link: ${stlinkProbeStatus}` : "Status terminé", probeError ? "error" : "success");
+      this.postStatus(command === "detect-stlink" ? `ST-Link: ${stlinkProbeStatus}` : "Status terminé", probeError || probeWarning ? "error" : "success");
       this.appendOutput("--- terminé ---", "separator");
     };
 
-    if (!status.stlinkToolOk) {
+    if (!measuring || !(status.stlinkToolOk || status.openocdOk) || !vscode.workspace.isTrusted) {
       finish("");
       return;
     }
-
-    void runDiagnosticProcess(status.stlinkPath, ["--probe"], status.projectPath || getWorkspaceRoot(), getExecutionEnv(status))
-      .then(result => finish(`${result.stdout}\n${result.stderr}`, result.exitCode === 0 ? undefined : new Error(result.stderr)));
+    this.probeRunning = true;
+    void runStlinkProbe(status)
+      .then(result => finish(`${result.stdout}\n${result.stderr}`, result.status === "OK" ? undefined : new Error(result.stderr), result.status, result.warning));
   }
 
   /**
@@ -1821,9 +2079,10 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
    */
   private async runQC1(command: string): Promise<void> {
     if (!vscode.workspace.isTrusted) { this.postStatus("Workspace non approuvé", "error"); return; }
-    const root = getWorkspaceRoot();
     const config = this.getConfig();
     const toolStatus = getQc1Status(this.context);
+    const root = toolStatus.projectPath || getWorkspaceRoot();
+    const configurationFingerprint = operationConfigurationFingerprint();
     const action = command.split("-")[0];
 
     if (!root) {
@@ -1831,7 +2090,7 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
         code: "QC1-PATH-001",
         title: "CHEMIN_PROJET_INVALIDE",
         message: "Chemin projet invalide",
-        cause: "Aucun workspace ouvert",
+        cause: "Aucun projet actif ou workspace ouvert",
         command,
         cwd: "--",
         path: toolStatus.projectPath || "--"
@@ -1922,13 +2181,19 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
         }
       }
       for (const invocation of invocations) {
+        assertOperationConfiguration(configurationFingerprint, operationConfigurationFingerprint());
+        if (invocation.phase === "building" && coreFromCommand(command)) {
+          const core = coreFromCommand(command)!;
+          const targets = readFileApi(toolStatus.buildPath, toolStatus.projectPath).targets.filter(target => !target.configuration || target.configuration === qc1Configuration().get<string>("buildType", "Debug"));
+          invocation.args = coreBuildArguments(invocation.args, targets, core);
+        }
         if (invocation.phase === "flashing") {
           const refreshed = getQc1Status(this.context);
           const refreshedElf = invocation.core === "cm7" ? refreshed.cm7ElfPath : invocation.core === "cm4" ? refreshed.cm4ElfPath : refreshed.elfPath;
           const refreshedBin = invocation.core === "cm7" ? refreshed.cm7BinPath : invocation.core === "cm4" ? refreshed.cm4BinPath : refreshed.binPath;
           if (invocation.inputArtifact === "elf" && !fileExists(refreshedElf)) throw new Error(`ELF ${invocation.core?.toUpperCase() || "STM32"} introuvable: configure le projet pour alimenter la CMake File API ou règle qc1.${invocation.core ? `${invocation.core}ElfPath` : "elfPath"}.`);
           if (invocation.executable === toolStatus.openocdPath) {
-            invocation.args = getOpenOcdProgramArgs(refreshedElf, refreshed.architecture.family, refreshed.architecture.coreMode === "dual", invocation.core);
+            invocation.args = getOpenOcdProgramArgs(refreshedElf, refreshed.architecture.family, needsBothH755Targets(refreshed.architecture), invocation.core);
           } else if (invocation.executable === objcopyPathForStatus(toolStatus)) {
             invocation.args[3] = refreshedElf;
             invocation.args[4] = refreshedBin;
@@ -1958,19 +2223,20 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
           }
         );
 
-        if (result.error || result.exitCode !== 0) {
+        if (!processSucceeded(result)) {
           failedResult = result;
           break;
         }
       }
       if (!failedResult && action === "debug") {
+        assertOperationConfiguration(configurationFingerprint, operationConfigurationFingerprint());
         const requestedCore = coreFromCommand(command);
         const core = requestedCore || (toolStatus.architecture.coreMode === "cm7" ? "cm7" : toolStatus.architecture.coreMode === "cm4" ? "cm4" : undefined);
         const refreshed = getQc1Status(this.context);
         const executable = core === "cm7" ? refreshed.cm7ElfPath : core === "cm4" ? refreshed.cm4ElfPath : refreshed.elfPath;
         const label = core?.toUpperCase() || "STM32F1";
         if (!fileExists(executable)) throw new Error(`ELF ${label} introuvable après le build.`);
-        const debugConfiguration = getCortexDebugConfiguration(projectDir, executable, refreshed.architecture.family, core) as vscode.DebugConfiguration;
+        const debugConfiguration = getCortexDebugConfiguration(projectDir, executable, refreshed.architecture.family, core, needsBothH755Targets(refreshed.architecture)) as vscode.DebugConfiguration;
         debugConfiguration.serverpath = refreshed.openocdPath;
         debugConfiguration.gdbPath = refreshed.gdbPath;
         const started = await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(vscode.Uri.file(projectDir)), debugConfiguration);
@@ -1995,11 +2261,14 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
     const detectedProbeStatus = readStlinkProbeStatus(fullOutput);
     if (detectedProbeStatus !== "non testé") stlinkProbeStatus = detectedProbeStatus;
 
-    const success =
-      !failedResult &&
-      parsed.errors === 0 &&
-      !parsed.hasBuildFailed &&
-      !parsed.hasFlashFailed;
+    const success = !failedResult;
+    if (toolStatus.projectPath !== getQc1Status(this.context).projectPath) {
+      progressManager.finish(false, "Projet changé : résultat non attribué au nouveau projet.");
+      syncDashboardState(this.context);
+      this.sendDashboardState();
+      this.postStatus("Projet changé : opération restante annulée", "error");
+      return;
+    }
     const resultMessage = success ? `${command} terminé` : "Commande échouée";
     progressManager.finish(success, resultMessage);
     const runtimeMs = dashboardState.progress.runtimeSeconds * 1000;
@@ -2023,7 +2292,7 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
         build: {
           ...dashboardState.build,
           lastBuildTime: new Date().toLocaleString(),
-          lastBuildSuccess: success || (["flash", "run"].includes(action) && !parsed.hasBuildFailed && parsed.errors === 0),
+          lastBuildSuccess: success,
           buildRuntimeMs: runtimeMs
         }
       };
@@ -2083,6 +2352,7 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
     );
 
     syncDashboardState(this.context);
+    await this.refreshArtifacts();
     if (commandError) {
       this.applyQc1Error(commandError);
       this.appendQc1Error(commandError, "commande");
@@ -2276,7 +2546,8 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
   private sendDashboardState() {
     this.view?.webview.postMessage({
       type: "dashboardState",
-      state: dashboardState
+      state: dashboardState,
+      views: renderDashboardViews(dashboardState),
     });
   }
 
@@ -2296,10 +2567,8 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
   }
 
   private sendToolsStatus() {
-    this.view?.webview.postMessage({
-      type: "toolsStatus",
-      tools: getQc1Status(this.context)
-    });
+    syncDashboardState(this.context);
+    this.sendDashboardState();
   }
 
   private sendTerminalMeta() {
@@ -2324,6 +2593,81 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  private discoveryRoots(): string[] {
+    const config = qc1Configuration();
+    return buildDiscoveryRoots(
+      getWorkspaceRoots(),
+      this.discovery.snapshot.selectedPath,
+      this.recent.paths(),
+      config.get<string[]>("discoveryRoots", []),
+    );
+  }
+
+  private publishProjectDiscovery(): void {
+    this.view?.webview.postMessage({
+      type: "projectDiscovery",
+      discovery: dashboardState.projectDiscovery,
+      views: renderDashboardViews(dashboardState),
+    });
+  }
+
+  private async chooseProjectFolder(): Promise<void> {
+    const selection = await vscode.window.showOpenDialog({
+      canSelectFiles: false,
+      canSelectFolders: true,
+      canSelectMany: false,
+      openLabel: "Choisir un dossier",
+    });
+    const folder = selection?.[0]?.fsPath;
+    if (!folder) return;
+    await this.discovery.scan([folder]);
+  }
+
+  private async selectProject(candidate: ProjectCandidate): Promise<void> {
+    if (this.buildRunning) throw new Error("Attendez la fin du build/flash/debug avant de changer de projet.");
+    const id = ++this.selectionGeneration;
+    if (await directoryAvailable(candidate.path) !== true) throw new Error("Projet absent ou inaccessible.");
+    if (id !== this.selectionGeneration || this.disposed) return;
+    if (this.buildRunning) throw new Error("Attendez la fin de l'opération QC1 avant de changer de projet.");
+    this.settingsUpdating++;
+    try { await this.configuration.update({ projectPath: candidate.path }); }
+    finally { this.settingsUpdating--; }
+    if (id !== this.selectionGeneration || this.disposed) return;
+    projectCache.clear();
+    await this.recent.remember(candidate);
+    await this.refreshManagerContext();
+    this.postStatus(`Projet actif: ${candidate.name}`, "success");
+  }
+
+  private async selectProjectPath(projectPath: string): Promise<void> {
+    const id = ++this.selectionGeneration;
+    const available = await directoryAvailable(projectPath);
+    if (id !== this.selectionGeneration || this.disposed) return;
+    if (available !== true) {
+      if (available === false) await this.recent.remove(projectPath);
+      await this.refreshRecentProjects();
+      throw new Error("Projet récent absent ou inaccessible.");
+    }
+    // Static analysis is cancellable and owned by the same discovery controller.
+    const candidate = await this.discovery.inspectForSelection(projectPath);
+    if (id !== this.selectionGeneration || this.disposed || this.discovery.snapshot.status === "cancelled") return;
+    if (candidate?.path === projectPath) await this.selectProject(candidate);
+    else throw new Error("Ce dossier n'est plus un projet STM32 détectable.");
+  }
+
+  private async updateProjectSettings(input: ProjectSettingsInput): Promise<void> {
+    const id = ++this.selectionGeneration;
+    if (this.buildRunning) throw new Error("Impossible de changer les réglages pendant une opération QC1.");
+    this.settingsUpdating++;
+    try { await this.configuration.update(input); }
+    finally { this.settingsUpdating--; }
+    if (id !== this.selectionGeneration || this.disposed) return;
+    projectCache.clear();
+    this.discovery.invalidate();
+    await this.refreshManagerContext(true);
+    this.postStatus("Réglages QC1 enregistrés", "success");
+  }
+
 }
 
 // === POINT D'ENTRÉE DE L'EXTENSION =========================================
@@ -2341,6 +2685,8 @@ export async function activate(context: vscode.ExtensionContext) {
   syncDashboardState(context);
 
   const provider = new QC1PanelProvider(context.extensionUri, context);
+  context.subscriptions.push(provider);
+  provider.initializeManager();
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(QC1PanelProvider.viewType, provider)
   );
@@ -2410,7 +2756,7 @@ export async function activate(context: vscode.ExtensionContext) {
     return provider.createDiagnosticReport();
   }));
   context.subscriptions.push(vscode.commands.registerCommand("qc1.refresh", () => {
-    provider.clearOutput();
+    provider.runCommand("status");
   }));
   context.subscriptions.push(vscode.commands.registerCommand("qc1.dev", () => {
     provider.runCommand("dev");

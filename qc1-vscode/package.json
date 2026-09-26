@@ -15,6 +15,7 @@
     "resources/cmake/**",
     "QC1_CODES.md",
     "AUDIT_PORTABILITY.md",
+    "PROJECT_MANAGER.md",
     "CHANGELOG.md",
     "README.md",
     "LICENSE",
@@ -284,7 +285,22 @@
           "qc1.projectPath": {
             "type": "string",
             "default": "",
-            "description": "Chemin du dossier projet STM32. Vide = auto-détection depuis le workspace."
+            "scope": "window",
+            "description": "Unique projet actif de la fenêtre, interne ou externe. QC1 écrit au scope Workspace si présent, sinon User. Vide = auto-détection du workspace."
+          },
+          "qc1.autoDiscoverProjects": {
+            "type": "boolean",
+            "default": false,
+            "scope": "window",
+            "description": "Détection statique bornée au démarrage et lors d'un changement de contexte. Pas de polling ni de scan de toute la machine."
+          },
+          "qc1.discoveryRoots": {
+            "type": "array",
+            "items": { "type": "string" },
+            "maxItems": 16,
+            "default": [],
+            "scope": "window",
+            "description": "Racines supplémentaires de recherche (~/ supporté). Les racines du disque et le home entier ne sont pas scannés."
           },
           "qc1.cmakePath": {
             "type": "string",

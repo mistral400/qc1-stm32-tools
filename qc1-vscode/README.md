@@ -6,6 +6,20 @@ Le rapport `QC1: Créer un rapport de diagnostic` comprend vingt sections et un 
 
 Les réglages facultatifs `qc1.toolPaths`, `qc1.targetMcu`, `qc1.elfPath`, `qc1.cm7ElfPath` et `qc1.cm4ElfPath` permettent de déclarer des outils supplémentaires, une preuve de MCU et des artefacts personnalisés.
 
+## Gestionnaire de projets QC1 (Bloc 3)
+
+La barre latérale comporte cinq pages réelles : **Projet**, **Build / Flash / Debug**, **Outils**, **Diagnostics** et **Réglages**. La page active est conservée par la WebView; les mises à jour ne reconstruisent plus tout le document et préservent le terminal ainsi que les réglages non enregistrés.
+
+Dans **Projet**, lance **Détecter les projets**, ou **Choisir / changer de dossier**, puis sélectionne un candidat. Le projet actif et ses preuves restent visibles indépendamment du dernier résultat de découverte. Les huit projets récents au maximum peuvent être sélectionnés ou retirés de l'historique, sans supprimer leurs fichiers. Un dossier absent est purgé; un accès refusé n'est pas confondu avec une suppression.
+
+`qc1.projectPath` est l'unique sélection persistée, au scope **window**. Avec un workspace, QC1 écrit au scope **Workspace**, même pour un dossier extérieur : ce chemin n'a pas à appartenir aux dossiers ouverts. Sans workspace, QC1 utilise **User**. Cela évite qu'une ancienne valeur Workspace masque une sélection extérieure écrite uniquement dans User. Les autres réglages conservent leurs scopes et leurs overrides existants. Voir [la politique et l'architecture du gestionnaire](PROJECT_MANAGER.md).
+
+**Réglages** expose le chemin actif, le build type, le preset CMake, le dossier de build, le port série et le baud rate. `qc1.autoDiscoverProjects` est **désactivé par défaut**. `qc1.discoveryRoots` permet d'ajouter jusqu'à seize racines (syntaxe `~/` acceptée). Le disque entier et le home entier sont exclus; aucun dossier personnel n'est codé en dur.
+
+Les fichiers structurants modifiés marquent le projet **à rescanner**, sans boucle de scans. **Rafraîchir ST-Link** effectue une mesure manuelle; un MCU ou une carte déduits des fichiers ne prouvent pas une connexion physique. Les versions d'outils non mesurées restent inconnues. Les artefacts existants ELF/BIN/HEX/MAP sont révélables sans changer leur génération. L'usage Flash/RAM n'est affiché que si la sortie du build le fournit, sans capacité ni pourcentage supposés.
+
+Les commandes F1 et H755 restent les backends existants. Un Makefile peut être découvert, mais cela n'ajoute pas de nouveau backend Make : le build QC1 demeure CMake natif ou intégré F1. HAL, CMSIS, CubeMX et `.ioc` ne deviennent pas des prérequis pour les projets manuels; le CMake natif vérifie les dépendances qu'il utilise réellement.
+
 ## Par quoi commencer
 
 1. Installe l'extension QC1 :
