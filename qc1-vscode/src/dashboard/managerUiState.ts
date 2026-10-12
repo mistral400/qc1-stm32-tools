@@ -17,6 +17,7 @@ interface ToolSnapshot {
   gdbOk: boolean; gdbPath: string;
   cmakeOk: boolean; cmakePath: string; cmakeSource: string;
   ninjaOk: boolean; ninjaPath: string; ninjaSource: string;
+  makeOk: boolean; makePath: string; makeGenerator: string;
   openocdOk: boolean; openocdPath: string; openocdSource: string;
   stlinkToolOk: boolean; stlinkPath: string;
   debuggerOk: boolean;
@@ -30,6 +31,7 @@ export function normalizeTools(status: ToolSnapshot, cortexVersion?: string): To
     tool("GDB", status.gdbOk, status.gdbPath, "toolchain / PATH"),
     tool("CMake", status.cmakeOk, status.cmakePath, status.cmakeSource),
     tool("Ninja", status.ninjaOk, status.ninjaPath, status.ninjaSource),
+    tool("Make", status.makeOk, status.makePath, status.makeGenerator || "PATH"),
     tool("OpenOCD", status.openocdOk, status.openocdPath, status.openocdSource),
     tool("ST-Link CLI", status.stlinkToolOk, status.stlinkPath, "configuration / PATH"),
     { name: "Cortex-Debug", status: status.debuggerOk ? "OK" : "Manquant", path: "extension VS Code", source: "registre des extensions", version: cortexVersion },

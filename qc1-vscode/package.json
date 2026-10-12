@@ -1,18 +1,35 @@
 {
   "name": "qc1-stm32-tools",
-  "displayName": "QC1 STM32 CMake Tools",
-  "description": "Outils CMake STM32F1 et STM32H755 dual-core pour VS Code",
-  "version": "0.3.1",
+  "displayName": "QC1 STM32 Tools",
+  "description": "Outils STM32F1 et STM32H7 dual-core pour VS Code",
+  "version": "0.4.0",
   "publisher": "Mistral400",
   "icon": "media/icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/matisserheaumeviale-ux/qc1-stm32-tools.git"
+    "url": "https://github.com/mistral400/qc1-stm32-tools.git"
   },
+  "bugs": {
+    "url": "https://github.com/mistral400/qc1-stm32-tools/issues"
+  },
+  "license": "SEE LICENSE IN LICENSE",
+  "categories": [
+    "Other",
+    "Extension Packs"
+  ],
+  "keywords": [
+    "STM32",
+    "CMake",
+    "ARM",
+    "embedded",
+    "ST-Link",
+    "OpenOCD"
+  ],
   "files": [
     "out/**",
     "media/**",
     "resources/cmake/**",
+    "docs/**",
     "QC1_CODES.md",
     "AUDIT_PORTABILITY.md",
     "PROJECT_MANAGER.md",
@@ -24,8 +41,7 @@
   "engines": {
     "vscode": "^1.118.0"
   },
-  "extensionDependencies": [
-    "ms-vscode.cmake-tools",
+  "extensionPack": [
     "mylonics.embedded-build-tools",
     "marus25.cortex-debug"
   ],
@@ -46,7 +62,10 @@
     "onCommand:qc1.debugCm4",
     "onCommand:qc1.run",
     "onCommand:qc1.status",
-    "onCommand:qc1.createDiagnosticReport"
+    "onCommand:qc1.selectStlink",
+    "onCommand:qc1.createDiagnosticReport",
+    "workspaceContains:**/.cproject",
+    "workspaceContains:**/.project"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -105,37 +124,37 @@
       },
       {
         "command": "qc1.buildCm7",
-        "title": "Build STM32H755 CM7",
+        "title": "Build STM32H7 CM7",
         "category": "QC1 STM32",
         "icon": "$(tools)"
       },
       {
         "command": "qc1.buildCm4",
-        "title": "Build STM32H755 CM4",
+        "title": "Build STM32H7 CM4",
         "category": "QC1 STM32",
         "icon": "$(tools)"
       },
       {
         "command": "qc1.flashCm7",
-        "title": "Flash STM32H755 CM7",
+        "title": "Flash STM32H7 CM7",
         "category": "QC1 STM32",
         "icon": "$(debug-start)"
       },
       {
         "command": "qc1.flashCm4",
-        "title": "Flash STM32H755 CM4",
+        "title": "Flash STM32H7 CM4",
         "category": "QC1 STM32",
         "icon": "$(debug-start)"
       },
       {
         "command": "qc1.debugCm7",
-        "title": "Debug STM32H755 CM7",
+        "title": "Debug STM32H7 CM7",
         "category": "QC1 STM32",
         "icon": "$(debug)"
       },
       {
         "command": "qc1.debugCm4",
-        "title": "Debug STM32H755 CM4",
+        "title": "Debug STM32H7 CM4",
         "category": "QC1 STM32",
         "icon": "$(debug)"
       },
@@ -164,6 +183,12 @@
         "title": "Detect ST-Link",
         "category": "QC1 STM32",
         "icon": "$(search)"
+      },
+      {
+        "command": "qc1.selectStlink",
+        "title": "Select ST-Link Probe",
+        "category": "QC1 STM32",
+        "icon": "$(plug)"
       },
       {
         "command": "qc1.openSerial",
@@ -202,24 +227,63 @@
     ],
     "menus": {
       "commandPalette": [
-        { "command": "qc1.build" },
-        { "command": "qc1.buildCm7" },
-        { "command": "qc1.buildCm4" },
-        { "command": "qc1.clean" },
-        { "command": "qc1.rebuild" },
-        { "command": "qc1.flash" },
-        { "command": "qc1.debug" },
-        { "command": "qc1.flashCm7" },
-        { "command": "qc1.flashCm4" },
-        { "command": "qc1.debugCm7" },
-        { "command": "qc1.debugCm4" },
-        { "command": "qc1.run" },
-        { "command": "qc1.status" },
-        { "command": "qc1.detectStlink" },
-        { "command": "qc1.openSerial" },
-        { "command": "qc1.startOpenOcd" },
-        { "command": "qc1.configure" },
-        { "command": "qc1.createDiagnosticReport" }
+        {
+          "command": "qc1.build"
+        },
+        {
+          "command": "qc1.buildCm7"
+        },
+        {
+          "command": "qc1.buildCm4"
+        },
+        {
+          "command": "qc1.clean"
+        },
+        {
+          "command": "qc1.rebuild"
+        },
+        {
+          "command": "qc1.flash"
+        },
+        {
+          "command": "qc1.debug"
+        },
+        {
+          "command": "qc1.flashCm7"
+        },
+        {
+          "command": "qc1.flashCm4"
+        },
+        {
+          "command": "qc1.debugCm7"
+        },
+        {
+          "command": "qc1.debugCm4"
+        },
+        {
+          "command": "qc1.run"
+        },
+        {
+          "command": "qc1.status"
+        },
+        {
+          "command": "qc1.detectStlink"
+        },
+        {
+          "command": "qc1.selectStlink"
+        },
+        {
+          "command": "qc1.openSerial"
+        },
+        {
+          "command": "qc1.startOpenOcd"
+        },
+        {
+          "command": "qc1.configure"
+        },
+        {
+          "command": "qc1.createDiagnosticReport"
+        }
       ],
       "view/title": [
         {
@@ -248,7 +312,9 @@
           "qc1.toolPaths": {
             "type": "object",
             "default": {},
-            "additionalProperties": { "type": "string" },
+            "additionalProperties": {
+              "type": "string"
+            },
             "scope": "resource",
             "description": "Chemins explicites des outils de diagnostic (ex.: arm-none-eabi-gdb, STM32CubeProgrammer, J-Link, Python)."
           },
@@ -282,6 +348,12 @@
             "scope": "resource",
             "description": "MCU déclaré, utilisé comme preuve dans le rapport et pour détecter les conflits."
           },
+          "qc1.cubeH7Path": {
+            "type": "string",
+            "default": "",
+            "scope": "resource",
+            "description": "Racine locale STM32CubeH7 contenant Drivers/ (aucun téléchargement automatique)."
+          },
           "qc1.projectPath": {
             "type": "string",
             "default": "",
@@ -296,7 +368,9 @@
           },
           "qc1.discoveryRoots": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "maxItems": 16,
             "default": [],
             "scope": "window",
@@ -417,7 +491,7 @@
     "@eslint/js": "^10.0.1",
     "@types/node": "^20.19.43",
     "@types/vscode": "^1.118.0",
-    "@vscode/vsce": "^3.9.2",
+    "@vscode/vsce": "^4.0.0",
     "eslint": "^10.10.0",
     "typescript": "^5.0.0",
     "typescript-eslint": "^8.70.0"

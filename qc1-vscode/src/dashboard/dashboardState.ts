@@ -135,6 +135,7 @@ export interface QC1EnvironmentStatus {
   stFlashInstalled: boolean;
   stlinkProbeStatus: "OK" | "non détecté" | "non testé";
   stlinkModel?: string;
+  stlinkSelectedProbe?: string;
   stlinkCheckedAt?: string;
   cmakeDetected: boolean;
 }
@@ -288,6 +289,7 @@ export const defaultDashboardState: DashboardState = {
     stlinkDetected: false,
     stFlashInstalled: false,
     stlinkProbeStatus: "non testé",
+    stlinkSelectedProbe: "Non sélectionnée",
     cmakeDetected: false
   },
 

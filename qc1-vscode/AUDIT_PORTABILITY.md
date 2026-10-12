@@ -41,7 +41,7 @@ Le diagnostic utilise un schéma JSON `reportSchemaVersion: 2`, intégré au rap
 - `src/qc1/processTools.ts` : processus bornés, recherche d'exécutables, architectures et inventaire d'outils.
 - `src/qc1/systemInspection.ts` et `extensionInventory.ts` : OS, devices et extensions.
 - `src/qc1/diagnosticReport.ts` : JSON versionné, vingt sections Markdown, confidentialité.
-- `src/qc1/hardware.ts`, modules `src/ai/` concernés : parseur ST-Link, Tcl, processus, sélection workspace, permissions et lint.
+- `src/qc1/hardware.ts`, `src/qc1/probeSelection.ts` : parseur et association de probes, numéro routé, Tcl OpenOCD, et masquage des serials.
 - `resources/cmake/CMakeLists.txt` : dossier source explicite pour le moteur intégré.
 - `test/portability.test.js` et `test/extensionPortability.test.js` : fixtures et intégration.
 

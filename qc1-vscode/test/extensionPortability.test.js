@@ -129,9 +129,9 @@ test("extension integration: multi-root, native validation, report and CMake arg
   assert.deepEqual(cm7Build[0].args, ["--preset", "Debug"]);
   assert.ok(cm7Build[1].args.includes("firmware_CM7"));
   const dualFlash = buildProcessInvocations(h755Status, "flash").filter(item => item.phase === "flashing");
-  assert.equal(dualFlash.length, 2);
+  assert.equal(dualFlash.length, 1);
   assert.ok(dualFlash[0].args.includes("target/stm32h7x.cfg"));
-  assert.match(dualFlash[1].args.at(-1), /cpu1/);
+  assert.match(dualFlash[0].args.at(-1), /cpu0; program \{[\s\S]*?verify; targets stm32h7x\.cpu1; program \{[\s\S]*?verify reset exit/);
   assert.ok(scopes.includes(firmware));
   const provider = new QC1PanelProvider(uri(context.extensionPath), context);
   await provider.createDiagnosticReport();

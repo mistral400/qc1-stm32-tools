@@ -45,6 +45,8 @@ Les actions sont contextuelles : F1 build/flash/debug/run; H755 CM7 ou CM4 selon
 
 Outils réutilise `Qc1Status`, sans seconde détection indépendante. Les versions non mesurées restent inconnues. ST-Link est inconnu avant probe manuel; la carte statique n'est pas une carte connectée. Il n'y a aucun timer de polling hardware. Rapport complet et commandes hardware restent des actions explicites.
 
+La page Outils affiche la sonde associée au projet actif et offre une sélection manuelle. Le précontrôle inventorie `st-info --probe`; plusieurs adaptateurs ouvrent une Quick Pick, un mapping absent n'est pas remplacé silencieusement par la première ligne. QC1 mémorise les associations par clé de projet hachée puis transmet le serial à OpenOCD, st-flash et Cortex-Debug. Avant flash/debug, OpenOCD doit exposer une cible de la famille du projet; sans OpenOCD, l'identification chip ID/description de `st-info` est utilisée. Le numéro complet n'est jamais ajouté aux logs. Cette vérification confirme une famille et non le part number ou le modèle exact de carte.
+
 Les diagnostics centralisent code, titre, cause, chemin et sévérité. Les seules actions de correction sont déterministes : rescanner, redétecter, sélectionner, ouvrir/révéler, rebuild. Aucun patch automatique du projet.
 
 ## Performance, cache et annulation

@@ -3,12 +3,14 @@ const test = require("node:test");
 
 const {
   getOpenOcdProgramArgs,
+  getOpenOcdMultiProgramArgs,
   getOpenOcdServerArgs,
   getStFlashWriteArgs,
   getCortexDebugConfiguration,
   readFlashOrigin,
   readStlinkProbeModel,
-  readStlinkProbeStatus
+  readStlinkProbeStatus,
+  readOpenOcdTargetFamily
 } = require("../out/qc1/hardware");
 
 test("parses real st-info probe counts", () => {
@@ -27,6 +29,21 @@ test("builds configured OpenOCD STM32F1 arguments", () => {
     "-f", "interface/stlink.cfg", "-f", "target/stm32f1x.cfg",
     "-c", "program {/tmp/firmware.elf} verify reset exit"
   ]);
+});
+
+test("routes OpenOCD, st-flash, and Cortex-Debug to an explicitly selected ST-Link", () => {
+  const serial = "303030303030303030303030";
+  assert.deepEqual(getOpenOcdServerArgs("stm32f1", false, serial), [
+    "-f", "interface/stlink.cfg", "-c", `adapter serial ${serial}`, "-f", "target/stm32f1x.cfg"
+  ]);
+  assert.deepEqual(getOpenOcdServerArgs("stm32h755", true, serial), [
+    "-f", "interface/stlink-dap.cfg", "-c", `adapter serial ${serial}`, "-c", "transport select dapdirect_swd",
+    "-c", "set DUAL_CORE 1", "-c", "set DUAL_BANK 1", "-f", "target/stm32h7x.cfg"
+  ]);
+  assert.deepEqual(getStFlashWriteArgs("firmware.bin", "0x08000000", serial), ["--serial", serial, "--reset", "write", "firmware.bin", "0x08000000"]);
+  assert.equal(getCortexDebugConfiguration("/project", "/build/app.elf", "stm32f1", undefined, false, serial).serialNumber, serial);
+  assert.throws(() => getStFlashWriteArgs("firmware.bin", "0x08000000", "not-a-serial"), /série ST-Link invalide/);
+  assert.throws(() => getOpenOcdServerArgs("stm32f1", false, "not-a-serial"), /série ST-Link invalide/);
 });
 
 test("requests a reset from the st-flash fallback", () => {
@@ -85,6 +102,37 @@ test("a named STLINK is not a successful probe when target examination fails", (
   assert.equal(readStlinkProbeStatus("Info : STLINK V3J5M2 (API v3) VID:PID 0483:374E\nError: target examination failed"), "non testé");
 });
 
+test("OpenOCD target-family evidence comes from runtime target names", () => {
+  assert.equal(readOpenOcdTargetFamily("Info : [stm32f1x.cpu] Cortex-M3 processor detected"), "stm32f1");
+  assert.equal(readOpenOcdTargetFamily("Info : [stm32h7x.cpu0] Cortex-M7 processor detected"), "stm32h7");
+  assert.equal(readOpenOcdTargetFamily("Info : STLINK V3J5M2 (API v3)"), undefined);
+  assert.equal(readOpenOcdTargetFamily("stm32f1x.cpu stm32h7x.cpu0"), undefined);
+});
+
+test("routes generic H7 targets through the dual-core OpenOCD transport and preserves the exact device for Cortex-Debug", () => {
+  const { getOpenOcdServerArgs, getOpenOcdProgramArgs, getCortexDebugConfiguration } = require("../out/qc1/hardware");
+  const args = getOpenOcdServerArgs("stm32h7", true);
+  assert.ok(args.includes("interface/stlink-dap.cfg"));
+  assert.ok(args.includes("target/stm32h7x.cfg"));
+  assert.ok(args.includes("set DUAL_CORE 1"));
+  assert.ok(args.includes("set DUAL_BANK 1"));
+  assert.match(getOpenOcdProgramArgs("/build/CM4.elf", "stm32h7", true, "cm4").at(-1), /^targets stm32h7x.cpu1;/);
+  const debug = getCortexDebugConfiguration("/project", "/build/CM7.elf", "stm32h7", "cm7", true, undefined, "STM32H745ZI");
+  assert.equal(debug.device, "STM32H745ZI");
+  assert.deepEqual(debug.configFiles, ["interface/stlink-dap.cfg", "target/stm32h7x.cfg"]);
+});
+
+test("programs and verifies both H7 cores before issuing one final reset", () => {
+  const args = getOpenOcdMultiProgramArgs([
+    { core: "cm4", elfPath: "/build/CM4 firmware.elf" },
+    { core: "cm7", elfPath: "/build/CM7 firmware.elf" },
+  ], "stm32h7");
+  const script = args.at(-1);
+  assert.match(script, /^targets stm32h7x\.cpu0; program \{\/build\/CM7 firmware\.elf\} verify; targets stm32h7x\.cpu1; program \{\/build\/CM4 firmware\.elf\} verify reset exit$/);
+  assert.equal((script.match(/\breset\b/g) || []).length, 1);
+  assert.throws(() => getOpenOcdMultiProgramArgs([{ core: "cm7", elfPath: "/build/CM7.elf" }], "stm32h7"), /CM7 et un ELF CM4/);
+});
+
 test("H755 probe uses OpenOCD first, bounded and without mutating firmware", async () => {
   const { probeStlink } = require("../out/qc1/hardware");
   const calls = [];
@@ -98,6 +146,20 @@ test("H755 probe uses OpenOCD first, bounded and without mutating firmware", asy
   assert.equal(calls[0].opts.timeoutMs, 8000);
   assert.equal(calls[0].args.at(-1), "init; targets; shutdown");
   assert.doesNotMatch(calls[0].args.join(" "), /\b(?:program|erase|reset|halt)\b/);
+});
+
+test("selected-probe OpenOCD preflight uses one serial and redacts it from returned logs", async () => {
+  const { probeStlink } = require("../out/qc1/hardware");
+  const serial = "303030303030303030303030";
+  let called;
+  const result = await probeStlink({ family: "stm32f1", dualCore: false, openocd: "openocd", serialNumber: serial }, async (exe, args) => {
+    called = { exe, args };
+    return { exitCode: 0, stdout: `Info : STLINK V3J5M2 (API v3) VID:PID 0483:374E serial: ${serial}\nInfo : [stm32f1x.cpu] Cortex-M3 processor detected`, stderr: "", timedOut: false, truncated: false };
+  });
+  assert.equal(result.status, "OK");
+  assert.equal(result.targetFamily, "stm32f1");
+  assert.ok(called.args.includes(`adapter serial ${serial}`));
+  assert.doesNotMatch(result.stdout, new RegExp(serial));
 });
 
 test("st-info timeout cannot hide an adapter detected by the fallback OpenOCD", async () => {

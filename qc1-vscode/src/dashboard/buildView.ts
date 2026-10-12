@@ -8,7 +8,7 @@ export function availableProjectCommands(state: DashboardState): Qc1Command[] {
   const result: Qc1Command[] = [];
   if (!state.project.projectDetected && !candidate && !state.project.cmakeProjectReady) return result;
   if (family === "STM32F1" || family === "stm32f1") result.push("build", "flash", "debug", "run");
-  else if (family === "STM32H7" || family === "stm32h755") {
+  else if (family === "STM32H7" || family === "stm32h7" || family === "stm32h755") {
     const cm7 = candidate ? candidate.cores.some((core) => core.id === "cm7") : state.project.cm7Present;
     const cm4 = candidate ? candidate.cores.some((core) => core.id === "cm4") : state.project.cm4Present;
     if (cm7) result.push("build-cm7", "flash-cm7", "debug-cm7");

@@ -8,7 +8,7 @@ export type Qc1Command = typeof qc1Commands[number];
 const simpleActions = [
   "clear", "copyOutput", "saveLog", "createDiagnosticReport", "settings", "refreshSettings",
   "refreshTools", "autoDetectPaths", "discoverProjects", "rescanProjects", "cancelProjectScan",
-  "chooseProjectFolder", "copyDiagnostic", "openExtensionFolder", "openProjectFolder", "detectStlink", "openSerial", "startOpenOcd",
+  "chooseProjectFolder", "copyDiagnostic", "openExtensionFolder", "openProjectFolder", "detectStlink", "selectStlink", "openSerial", "startOpenOcd",
 ] as const;
 export type WebviewMessage =
   | { type: "command" | "run" | "terminal"; command: Qc1Command }

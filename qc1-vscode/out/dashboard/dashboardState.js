@@ -123,6 +123,7 @@ exports.defaultDashboardState = {
         stlinkDetected: false,
         stFlashInstalled: false,
         stlinkProbeStatus: "non testé",
+        stlinkSelectedProbe: "Non sélectionnée",
         cmakeDetected: false
     },
     projectDiscovery: {

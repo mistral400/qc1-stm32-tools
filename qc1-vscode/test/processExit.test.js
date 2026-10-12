@@ -16,3 +16,7 @@ test("a real nonzero exit code remains a failure with stderr diagnostics", async
   assert.equal(processSucceeded(result), false);
   assert.equal(processSucceeded({ exitCode: null, error: "spawn failed", timedOut: false }), false);
 });
+
+test("unknown rejection objects are still treated as process failures", () => {
+  assert.equal(processSucceeded({ exitCode: 0, error: new Error("spawn failed"), timedOut: false }), false);
+});

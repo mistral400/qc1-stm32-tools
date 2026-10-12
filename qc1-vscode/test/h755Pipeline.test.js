@@ -46,7 +46,7 @@ test("extension refreshes CubeMX utility targets and core artifacts after config
   assert.equal(configured.cm4TargetName, "MyProject_CM4");
   assert.equal(extension.getProjectDiagnostics({ ...configured, architecture: { ...configured.architecture,
     cm7: { ...configured.architecture.cm7, linkerScriptPath: "", linkerCandidates: [path.join(root, "CM7", "flash_CM7.ld"), path.join(root, "CM7", "sram_CM7.ld")] }
-  }).some(diagnostic => diagnostic.title === "LINKER_CM7_SELECTION_UNRESOLVED"), true);
+  } }).some(diagnostic => diagnostic.title === "LINKER_CM7_SELECTION_UNRESOLVED"), true);
   assert.throws(() => extension.buildProcessInvocations({ ...configured, openocdOk: false, stFlashOk: true, stFlashPath: "/tools/st-flash" }, "flash-cm4"), /OpenOCD requis/);
   for (const core of ["cm7", "cm4"]) {
     const flash = extension.buildProcessInvocations({ ...configured, openocdOk: true, openocdPath: "/tools/openocd" }, `flash-${core}`);

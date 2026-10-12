@@ -39,7 +39,7 @@ import * as os from "os";
 import * as path from "path";
 import { executableExists, resolveExecutable, collectTools, runProcess, buildToolEnvironment, processSucceeded } from "./qc1/processTools";
 import { inside, readText, resolveUserPath } from "./qc1/filesystem";
-import { inspectProjectDetails } from "./qc1/projectDiagnostics";
+import { inspectLinker, inspectProjectDetails } from "./qc1/projectDiagnostics";
 import { inspectSystem, inspectDevices } from "./qc1/systemInspection";
 import { readFileApi } from "./qc1/cmakeFileApi";
 import { readCoreBuildMetadata, configuredCoreArtifact, configuredCoreTarget, applyCoreBuildMetadata, resolvedTargetName, coreBuildArguments } from "./qc1/coreBuild";
@@ -62,6 +62,7 @@ import {
 } from "./qc1/projectDiscovery";
 import {
   getOpenOcdProgramArgs,
+  getOpenOcdMultiProgramArgs,
   getOpenOcdServerArgs,
   getStFlashWriteArgs,
   getCortexDebugConfiguration,
@@ -71,7 +72,18 @@ import {
   probeStlink
 } from "./qc1/hardware";
 import { inspectCmakePresets } from "./qc1/cmakePresets";
-import { coreFromCommand, Qc1Core, Qc1TargetArchitecture } from "./qc1/targetArchitecture";
+import { coreFromCommand, isKnownDualCoreH7Device, isStm32H7Family, Qc1Core, Qc1TargetArchitecture } from "./qc1/targetArchitecture";
+import {
+  PROBE_SELECTION_STORAGE_KEY,
+  isValidStlinkSerial,
+  normalizeStlinkProbeAssignments,
+  probeSelectionMatchesProject,
+  probeMatchesFamily,
+  projectProbeSelectionKey,
+  readStlinkProbeInventory,
+  redactStlinkSerials,
+  stlinkSerialLabel,
+} from "./qc1/probeSelection";
 import {
   buildDiagnosticReport,
   DiagnosticToolReport
@@ -109,11 +121,11 @@ function discoverProject(root: string): Qc1ProjectInspection | null {
   return value;
 }
 
-function inspectProjectCached(root: string): Qc1ProjectInspection {
-  const key = `inspect:${root}`;
+function inspectProjectCached(root: string, cubeH7Root = ""): Qc1ProjectInspection {
+  const key = `inspect:${root}:${cubeH7Root}`;
   const cached = projectCache.get(key);
   if (cached?.value && Date.now() - cached.time < 15000) return cached.value;
-  const value = inspectStm32Project(root);
+  const value = inspectStm32Project(root, undefined, cubeH7Root);
   if (projectCache.size > 20) projectCache.clear();
   projectCache.set(key, { time: Date.now(), value });
   return value;
@@ -181,12 +193,21 @@ function qc1Configuration(root = getWorkspaceRoot()): vscode.WorkspaceConfigurat
   return vscode.workspace.getConfiguration("qc1", scope ? vscode.Uri.file(scope) : undefined);
 }
 
-function operationConfigurationFingerprint(): string {
+function readProjectProbeSerial(context: vscode.ExtensionContext, projectPath: string): string {
+  if (!projectPath) return "";
+  const assignments = normalizeStlinkProbeAssignments(context.workspaceState?.get<unknown>(PROBE_SELECTION_STORAGE_KEY, {}));
+  return assignments[projectProbeSelectionKey(projectPath)] || "";
+}
+
+function operationConfigurationFingerprint(context?: vscode.ExtensionContext, includeProbeSelection = true): string {
   const config = qc1Configuration();
-  return JSON.stringify([vscode.workspace.getConfiguration("qc1").get("projectPath", ""), ...[
+  const workspaceRoot = getWorkspaceRoot() || process.cwd();
+  const configuredPath = vscode.workspace.getConfiguration("qc1").get<string>("projectPath", "").trim();
+  const projectPath = configuredPath ? resolveUserPath(configuredPath, workspaceRoot) : getWorkspaceRoot();
+  return JSON.stringify([vscode.workspace.getConfiguration("qc1").get("projectPath", ""), projectPath || "", ...[
     "buildDirectory", "buildType", "cmakePreset", "elfPath", "cm7ElfPath", "cm4ElfPath",
     "compilerPath", "openocdPath", "cmakePath", "stlinkPath", "targetMcu",
-  ].map((key) => config.get(key))]);
+  ].map((key) => config.get(key)), includeProbeSelection && context && projectPath ? readProjectProbeSerial(context, projectPath) : ""]);
 }
 
 
@@ -244,6 +265,8 @@ function findSerialPort(configuredPort: string): string {
 type Qc1Status = {
   projectPath: string;
   projectLayout: Qc1ProjectLayout;
+  cubeIdeImport: boolean;
+  cubeIdeDependenciesComplete: boolean;
   projectName: string;
   cmakeSourcePath: string;
   buildPath: string;
@@ -279,6 +302,9 @@ type Qc1Status = {
   ninjaPath: string;
   ninjaOk: boolean;
   ninjaSource: string;
+  makePath: string;
+  makeOk: boolean;
+  makeGenerator: string;
   compilerPath: string;
   compilerOk: boolean;
   compilerSource: string;
@@ -298,6 +324,7 @@ type Qc1Status = {
   stlinkProbeStatus: "OK" | "non détecté" | "non testé";
   stlinkProbeModel: string;
   stlinkProbeOk: boolean;
+  stlinkSerialNumber: string;
 };
 
 function binaryForElf(elfPath: string, buildPath: string, fallbackName: string): string {
@@ -378,6 +405,8 @@ export function getQc1Status(context: vscode.ExtensionContext): Qc1Status {
     ? resolveConfiguredProjectPath(configuredProjectPath, workspaceRoot || process.cwd()) : "";
   const config = vscode.workspace.getConfiguration("qc1", requestedProjectPath || workspaceRoot ? vscode.Uri.file(requestedProjectPath || workspaceRoot) : undefined);
   const autoDetectProject = config.get<boolean>("autoDetectProject", true);
+  const configuredCubeH7Path = config.get<string>("cubeH7Path", "").trim();
+  const cubeH7Root = configuredCubeH7Path ? resolveUserPath(configuredCubeH7Path, requestedProjectPath || workspaceRoot || process.cwd()) : "";
   const configuredCmakePath = getExistingSettingPath(config, "cmakePath");
   const compilerPathSetting = getExistingSettingPath(config, "compilerPath");
   const openocdPathSetting = getExistingSettingPath(config, "openocdPath");
@@ -385,9 +414,10 @@ export function getQc1Status(context: vscode.ExtensionContext): Qc1Status {
   const detectedProject = !configuredProjectPath && autoDetectProject
     ? workspaceRoots.map(root => discoverProject(root)).find(Boolean)
     : null;
-  const projectInspection = detectedProject || (requestedProjectPath
-    ? inspectProjectCached(requestedProjectPath)
-    : inspectStm32Project(""));
+  const selectedProjectRoot = detectedProject?.root || requestedProjectPath;
+  const projectInspection = selectedProjectRoot
+    ? inspectProjectCached(selectedProjectRoot, cubeH7Root)
+    : inspectStm32Project("", undefined, cubeH7Root);
   const projectPath = projectInspection.root;
   const architecture: Qc1TargetArchitecture = { ...projectInspection.architecture, cm7: { ...projectInspection.architecture.cm7 }, cm4: { ...projectInspection.architecture.cm4 } };
   const projectOk = Boolean(projectPath) && fileExists(projectPath) && projectInspection.layout !== "unknown";
@@ -417,7 +447,7 @@ export function getQc1Status(context: vscode.ExtensionContext): Qc1Status {
   const outputName = nativeCmakeOk ? projectInspection.projectName : "firmware";
   const fileApi = nativeCmakeOk ? readFileApi(buildPath, projectPath) : undefined;
   const targets = fileApi?.targets.filter(t => t.type === "EXECUTABLE" && (!t.configuration || t.configuration === buildType)) || [];
-  const coreMetadata = architecture.family === "stm32h755" ? readCoreBuildMetadata(projectPath, buildPath, buildType) : undefined;
+  const coreMetadata = isStm32H7Family(architecture.family) ? readCoreBuildMetadata(cmakeSourcePath, buildPath, buildType) : undefined;
   if (coreMetadata) applyCoreBuildMetadata(architecture, coreMetadata);
   const configuredElf = config.get<string>("elfPath", "");
   const configuredCm7Elf = config.get<string>("cm7ElfPath", "");
@@ -425,7 +455,7 @@ export function getQc1Status(context: vscode.ExtensionContext): Qc1Status {
   const cm7ElfPath = coreMetadata ? configuredCoreArtifact(coreMetadata, "cm7", configuredCm7Elf ? resolveUserPath(configuredCm7Elf, projectPath) : "") : "";
   const cm4ElfPath = coreMetadata ? configuredCoreArtifact(coreMetadata, "cm4", configuredCm4Elf ? resolveUserPath(configuredCm4Elf, projectPath) : "") : "";
   const defaultElfPath = targets.length === 1 && targets[0].artifacts.length === 1 ? targets[0].artifacts[0] : buildPath ? path.join(buildPath, `${outputName}.elf`) : "";
-  const elfPath = configuredElf ? resolveUserPath(configuredElf, projectPath) : architecture.family === "stm32h755" ? (cm7ElfPath || cm4ElfPath) : defaultElfPath;
+  const elfPath = configuredElf ? resolveUserPath(configuredElf, projectPath) : isStm32H7Family(architecture.family) ? (cm7ElfPath || cm4ElfPath) : defaultElfPath;
   const binPath = binaryForElf(elfPath, buildPath, outputName);
   const cm7TargetName = coreMetadata && configuredCoreTarget(coreMetadata.buildTargets, "cm7") || architecture.cm7.targetName;
   const cm4TargetName = coreMetadata && configuredCoreTarget(coreMetadata.buildTargets, "cm4") || architecture.cm4.targetName;
@@ -437,6 +467,19 @@ export function getQc1Status(context: vscode.ExtensionContext): Qc1Status {
   const pathNinja = findExecutable(os.platform() === "win32" ? "ninja.exe" : "ninja");
   const ninjaPath = embeddedNinjaPath || pathNinja || "";
   const ninjaSource = embeddedNinjaPath ? "extension" : pathNinja ? "PATH" : "introuvable";
+  const makeCandidates = os.platform() === "win32"
+    ? [
+      { name: "nmake.exe", generator: "NMake Makefiles" },
+      { name: "mingw32-make.exe", generator: "MinGW Makefiles" },
+      { name: "make.exe", generator: "Unix Makefiles" },
+    ]
+    : [
+      { name: "make", generator: "Unix Makefiles" },
+      { name: "gmake", generator: "Unix Makefiles" },
+    ];
+  const makeFallback = makeCandidates.map(candidate => ({ ...candidate, path: resolveExecutable(candidate.name) })).find(candidate => candidate.path);
+  const makePath = makeFallback?.path || "";
+  const makeGenerator = makeFallback?.generator || "";
 
   const autoCompilerPath = findExecutable(os.platform() === "win32" ? "arm-none-eabi-gcc.exe" : "arm-none-eabi-gcc");
   const compilerPath = compilerPathSetting || embeddedGccPath || autoCompilerPath || "";
@@ -453,20 +496,37 @@ export function getQc1Status(context: vscode.ExtensionContext): Qc1Status {
   const stFlashPath = autoStFlashPath || "";
   const stFlashSource = autoStFlashPath ? "PATH" : "introuvable";
   const stlinkPath = getExecutableSettingPath(config, "stlinkPath", os.platform() === "win32" ? "st-info.exe" : "st-info");
+  const stlinkSerialNumber = readProjectProbeSerial(context, projectPath);
   const debuggerOk = Boolean(vscode.extensions.getExtension("marus25.cortex-debug"));
   const serialPort = findSerialPort((config.get<string>("serialPort") || "").trim());
   const baudRate = config.get<number>("baudRate", 19200);
-  const h755Cores = [architecture.cm7, architecture.cm4].filter((core) => core.present);
+  const h7Cores = [architecture.cm7, architecture.cm4].filter((core) => core.present);
   // Native CMake owns generated/external dependencies, just as for F1. Static
-  // absence of a CubeMX folder must not reject a manual H755 project.
-  const h755Complete = architecture.family === "stm32h755" && h755Cores.length > 0;
-  const projectComplete = projectOk && cmakeProjectReady && (architecture.family === "stm32h755"
-    ? nativeCmakeOk && h755Complete
+  // absence of a CubeMX folder must not reject a native H7 project.
+  const h7NativeComplete = isStm32H7Family(architecture.family) && h7Cores.length > 0;
+  const cubeIdeImport = !nativeCmakeOk && projectInspection.layout === "stm32cubeide" && isStm32H7Family(architecture.family);
+  const cubeIdeStructureComplete = cubeIdeImport && h7Cores.length > 0 && h7Cores.every((core) =>
+    core.sources.length > 0 && Boolean(core.startupPath && core.linkerScriptPath && core.compileOptions.length) &&
+    core.missingFlags.length === 0 && core.missingDefines.length === 0,
+  );
+  const cubeIdeHalRequired = h7Cores.some((core) => core.definitions.includes("USE_HAL_DRIVER"));
+  const cubeIdeHalConfigsReady = h7Cores.every((core) => !core.definitions.includes("USE_HAL_DRIVER") ||
+    core.headers.some((header) => path.basename(header).toLowerCase() === "stm32h7xx_hal_conf.h" && fileExists(header)));
+  const cubeIdeCmsisCoreReady = Boolean(architecture.cmsisPath) && h7Cores.every((core) =>
+    fileExists(path.join(architecture.cmsisPath, "Include", core.core === "cm7" ? "core_cm7.h" : "core_cm4.h")));
+  const cubeIdeDependenciesComplete = cubeIdeStructureComplete &&
+    (!cubeIdeHalRequired || Boolean(architecture.halPath && fileExists(path.join(architecture.halPath, "Inc", "stm32h7xx_hal.h")) && fileExists(path.join(architecture.halPath, "Src", "stm32h7xx_hal.c")) && cubeIdeHalConfigsReady)) &&
+    Boolean(architecture.cmsisPath && cubeIdeCmsisCoreReady && architecture.cmsisDevicePath && architecture.deviceHeaderPath && fileExists(architecture.deviceHeaderPath)) &&
+    (!architecture.bspRequired || Boolean(architecture.bspPath && fileExists(path.join(architecture.bspPath, "stm32h7xx_nucleo.h")) && fileExists(path.join(architecture.bspPath, "stm32h7xx_nucleo.c"))));
+  const projectComplete = projectOk && cmakeProjectReady && (isStm32H7Family(architecture.family)
+    ? nativeCmakeOk && h7NativeComplete || Boolean(cubeIdeDependenciesComplete)
     : nativeCmakeOk || (sourceOk && startupOk && linkerScriptOk));
 
   return {
     projectPath,
     projectLayout: projectInspection.layout,
+    cubeIdeImport,
+    cubeIdeDependenciesComplete,
     projectName: projectInspection.projectName,
     cmakeSourcePath,
     buildPath,
@@ -502,6 +562,9 @@ export function getQc1Status(context: vscode.ExtensionContext): Qc1Status {
     ninjaPath: ninjaPath || "Not found",
     ninjaOk: Boolean(ninjaPath),
     ninjaSource,
+    makePath: makePath || "Not found",
+    makeOk: Boolean(makePath),
+    makeGenerator,
     compilerPath: compilerPath || "Not found",
     compilerOk: Boolean(compilerPath),
     compilerSource,
@@ -520,7 +583,8 @@ export function getQc1Status(context: vscode.ExtensionContext): Qc1Status {
     baudRate,
     stlinkProbeStatus,
     stlinkProbeModel,
-    stlinkProbeOk: stlinkProbeStatus === "OK"
+    stlinkProbeOk: stlinkProbeStatus === "OK",
+    stlinkSerialNumber
   };
 }
 
@@ -547,7 +611,7 @@ function formatDiagnostic(status: Qc1Status): string {
     `Sources             ${status.sourceOk ? "OK" : "Introuvable"}`,
     `Core                ${status.coreOk ? "OK" : "optionnel/absent"}`,
     `Drivers             ${status.driversOk ? "OK" : "optionnel/absent"}`,
-    `Startup             ${status.architecture.family === "stm32h755" ? [status.architecture.cm7, status.architecture.cm4].filter(core => core.present).map(core => `${core.core.toUpperCase()}:${core.startupPath ? "OK" : "absent"}`).join(" ") : status.startupOk ? "OK" : "Introuvable"}`,
+    `Startup             ${isStm32H7Family(status.architecture.family) ? [status.architecture.cm7, status.architecture.cm4].filter(core => core.present).map(core => `${core.core.toUpperCase()}:${core.startupPath ? "OK" : "absent"}`).join(" ") : status.startupOk ? "OK" : "Introuvable"}`,
     `Linker script       ${status.linkerScriptOk ? "OK" : "Introuvable"}`,
     `CMake               ${status.cmakeOk ? `OK ${status.cmakeSource}` : "Introuvable"}`,
     `Ninja               ${status.ninjaOk ? `OK ${status.ninjaSource}` : "Introuvable"}`,
@@ -558,6 +622,7 @@ function formatDiagnostic(status: Qc1Status): string {
     `st-info             ${status.stlinkToolOk ? "OK" : "Missing"}`,
     `Probe ST-Link       ${status.stlinkProbeStatus}`,
     `Modèle ST-Link      ${status.stlinkProbeModel}`,
+    `Sonde sélectionnée  ${stlinkSerialLabel(status.stlinkSerialNumber)}`,
     `Port série          ${status.serialPort || "Non configuré/détecté"}`,
     "",
     "Project folder:",
@@ -658,34 +723,76 @@ export function getProjectDiagnostics(status: Qc1Status): Qc1DiagnosticInfo[] {
     });
   }
 
-  if (status.architecture.family === "stm32h755") {
+  if (isStm32H7Family(status.architecture.family)) {
+    const cubeRoot = status.architecture.cubeH7Root || status.projectPath;
+    const halRoot = status.architecture.halPath || path.join(cubeRoot, "Drivers", "STM32H7xx_HAL_Driver");
+    const cmsisRoot = status.architecture.cmsisPath || path.join(cubeRoot, "Drivers", "CMSIS");
+    const deviceRoot = status.architecture.cmsisDevicePath || path.join(cubeRoot, "Drivers", "CMSIS", "Device", "ST", "STM32H7xx");
+    const bspRoot = status.architecture.bspPath || path.join(cubeRoot, "Drivers", "BSP", "STM32H7xx_Nucleo");
+    const structureLevel = status.nativeCmakeOk ? "warning" : "error";
     if (status.architecture.coreMode === "unknown") diagnostics.push({
-      code: "QC1-H755-001", level: "error", title: "COEUR_H755_INTROUVABLE",
+      code: "QC1-H755-001", level: "error", title: "COEUR_H7_INTROUVABLE",
       message: "Aucun firmware CM7 ou CM4 reconnu", cause: "QC1 attend des indices concordants: dossier, CORE_CM7/CORE_CM4, startup ou linker",
       checkedPath: status.projectPath
     });
     for (const core of [status.architecture.cm7, status.architecture.cm4]) {
       if (!core.present) continue;
       const label = core.core.toUpperCase();
-      const structuralLevel = status.nativeCmakeOk ? "warning" : "error";
-      if (!core.cmakePath) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "002" : "003"}`, level: structuralLevel, title: `CMAKE_${label}_INTROUVABLE`, message: `CMake ${label} non résolu séparément`, cause: `Le CMake racine peut déclarer les cibles ${label}; QC1 ne crée pas de sous-projet`, checkedPath: core.directory || status.projectPath });
-      if (!core.startupPath) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "004" : "005"}`, level: structuralLevel, title: `STARTUP_${label}_INTROUVABLE`, message: `Startup ${label} absent ou ambigu`, cause: `CMake peut fournir ou générer le startup; aucune sélection arbitraire pour ${label}`, checkedPath: core.directory || status.projectPath });
+      if (status.cubeIdeImport && !core.sources.length) diagnostics.push({ code: `QC1-H7-${core.core === "cm7" ? "001" : "002"}`, level: "error", title: `SOURCES_${label}_INTROUVABLES`, message: `Sources ${label} absentes`, cause: `Aucune source C/C++ ou assembleur n'a été attribuée à ${label}`, checkedPath: core.directory || status.projectPath });
+      if (!status.cubeIdeImport && !core.cmakePath) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "002" : "003"}`, level: structureLevel, title: `CMAKE_${label}_INTROUVABLE`, message: `CMake ${label} non résolu séparément`, cause: `Le CMake racine peut déclarer les cibles ${label}; QC1 ne crée pas de sous-projet`, checkedPath: core.directory || status.projectPath });
+      if (!core.startupPath) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "004" : "005"}`, level: structureLevel, title: `STARTUP_${label}_INTROUVABLE`, message: `Startup ${label} absent ou ambigu`, cause: `CMake peut fournir ou générer le startup; aucune sélection arbitraire pour ${label}`, checkedPath: core.directory || status.projectPath });
       if (!core.linkerScriptPath) diagnostics.push(core.linkerCandidates.length ? {
         code: `QC1-H755-${core.core === "cm7" ? "006" : "007"}`, level: "warning", title: `LINKER_${label}_SELECTION_UNRESOLVED`,
         message: `Scripts linker ${label} détectés; sélection active non confirmée`,
         cause: `Plusieurs scripts linker ${label} existent; la sélection active n'a pas pu être confirmée statiquement.`,
         checkedPath: core.linkerCandidates[0]
       } : {
-        code: `QC1-H755-${core.core === "cm7" ? "006" : "007"}`, level: structuralLevel, title: `LINKER_${label}_INTROUVABLE`,
+        code: `QC1-H755-${core.core === "cm7" ? "006" : "007"}`, level: structureLevel, title: `LINKER_${label}_INTROUVABLE`,
         message: `Linker ${label} absent`, cause: `Aucun script linker attribuable à ${label} n'a été trouvé`,
         checkedPath: core.directory || status.projectPath
       });
       if (!core.targetName) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "008" : "009"}`, level: "warning", title: `TARGET_${label}_NON_RESOLUE`, message: `Nom de cible CMake ${label} non résolu`, cause: "Le build global reste disponible; configure le projet une fois pour alimenter la CMake File API", checkedPath: core.cmakePath || status.projectPath });
-      if (core.missingFlags.length) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "016" : "017"}`, level: "warning", title: `FLAGS_${label}_NON_CONFIRMES`, message: `Options ${label} non explicites dans les commandes de compilation: ${core.missingFlags.join(" ")}`, cause: core.missingFlags.includes("-mthumb") ? "GCC peut activer Thumb implicitement avec -mcpu=cortex-m; confirmer le mode effectif avec le compilateur ciblé." : "Les options CPU attendues ne sont pas confirmées par les commandes CMake.", checkedPath: core.cmakePath || status.projectPath });
-      if (core.missingDefines.length) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "018" : "019"}`, level: "warning", title: `DEFINES_${label}_NON_CONFIRMES`, message: `Defines ${label} non confirmés: ${core.missingDefines.join(" ")}`, cause: "CORE_CMx et STM32H755xx doivent provenir du CMake CubeMX", checkedPath: core.cmakePath || status.projectPath });
+      if (status.cubeIdeImport && core.missingFlags.length) diagnostics.push({ code: "QC1-H7-009", level: "error", title: `FLAGS_${label}_INCOMPLETS`, message: `Options CPU/FPU/ABI ${label} incomplètes: ${core.missingFlags.join(" ")}`, cause: "Renseigne les options propres à ce cœur dans le projet CubeIDE; QC1 ne choisit pas une ABI à sa place.", checkedPath: core.directory || status.projectPath });
+      else if (core.missingFlags.length) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "016" : "017"}`, level: "warning", title: `FLAGS_${label}_NON_CONFIRMES`, message: `Options ${label} non explicites dans les commandes de compilation: ${core.missingFlags.join(" ")}`, cause: core.missingFlags.includes("-mthumb") ? "GCC peut activer Thumb implicitement avec -mcpu=cortex-m; confirmer le mode effectif avec le compilateur ciblé." : "Les options CPU attendues ne sont pas confirmées par les commandes CMake.", checkedPath: core.cmakePath || status.projectPath });
+      if (status.cubeIdeImport && core.missingDefines.length) diagnostics.push({ code: "QC1-H7-010", level: "error", title: `DEFINES_${label}_INCOMPLETS`, message: `Defines MCU/cœur ${label} incomplets: ${core.missingDefines.join(" ")}`, cause: `Ajoute les defines correspondant à ${status.architecture.device} et au cœur ${label} dans le projet CubeIDE.`, checkedPath: core.directory || status.projectPath });
+      else if (core.missingDefines.length) diagnostics.push({ code: `QC1-H755-${core.core === "cm7" ? "018" : "019"}`, level: "warning", title: `DEFINES_${label}_NON_CONFIRMES`, message: `Defines ${label} non confirmés: ${core.missingDefines.join(" ")}`, cause: `CORE_CMx et ${status.architecture.device} doivent provenir de la configuration du projet`, checkedPath: core.cmakePath || status.projectPath });
     }
     const cmake = inspectProjectCached(status.projectPath).cmake;
     const dependencyReferences = [...cmake.sources, ...cmake.includes, ...cmake.definitions].join("\n");
+    if (status.cubeIdeImport) {
+      const halRequired = [status.architecture.cm7, status.architecture.cm4].some(core => core.present && core.definitions.includes("USE_HAL_DRIVER"));
+      if (halRequired) {
+        const halHeader = path.join(halRoot, "Inc", "stm32h7xx_hal.h");
+        const halSource = path.join(halRoot, "Src", "stm32h7xx_hal.c");
+        if (!fileExists(halHeader) || !fileExists(halSource)) diagnostics.push({
+          code: "QC1-H7-003", level: "error", title: "HAL_H7_INTROUVABLE", message: "HAL STM32H7 incomplète",
+          cause: `Ajoute un STM32CubeH7 compatible ou règle qc1.cubeH7Path. Fichiers attendus: ${path.join(halRoot, "Inc", "stm32h7xx_hal.h")} et ${halSource}`,
+          checkedPath: !fileExists(halHeader) ? halHeader : halSource,
+        });
+        for (const core of [status.architecture.cm7, status.architecture.cm4].filter(core => core.present && core.definitions.includes("USE_HAL_DRIVER"))) {
+          if (!core.headers.some(header => path.basename(header).toLowerCase() === "stm32h7xx_hal_conf.h" && fileExists(header))) diagnostics.push({
+            code: `QC1-H7-${core.core === "cm7" ? "004" : "005"}`, level: "error", title: `HAL_CONFIG_${core.core.toUpperCase()}_INTROUVABLE`, message: `Configuration HAL ${core.core.toUpperCase()} introuvable`,
+            cause: `Ajoute stm32h7xx_hal_conf.h aux headers du cœur ${core.core.toUpperCase()}.`, checkedPath: path.join(core.directory || status.projectPath, "Inc", "stm32h7xx_hal_conf.h"),
+          });
+        }
+      }
+      const cmsisCoreMissing = [status.architecture.cm7, status.architecture.cm4].filter(core => core.present && !fileExists(path.join(cmsisRoot, "Include", core.core === "cm7" ? "core_cm7.h" : "core_cm4.h")));
+      if (cmsisCoreMissing.length) diagnostics.push({
+        code: "QC1-H7-006", level: "error", title: "CMSIS_CORE_INTROUVABLE", message: "Headers CMSIS Core manquants",
+        cause: `Ajoute CMSIS Core ou règle qc1.cubeH7Path. Header manquant: ${path.join(cmsisRoot, "Include", cmsisCoreMissing[0].core === "cm7" ? "core_cm7.h" : "core_cm4.h")}`,
+        checkedPath: path.join(cmsisRoot, "Include"),
+      });
+      if (!status.architecture.deviceHeaderPath || !fileExists(status.architecture.deviceHeaderPath)) diagnostics.push({
+        code: "QC1-H7-007", level: "error", title: "CMSIS_DEVICE_H7_INTROUVABLE", message: `Header CMSIS Device pour ${status.architecture.device} introuvable`,
+        cause: `Ajoute CMSIS Device STM32H7 ou règle qc1.cubeH7Path. Header attendu: ${path.join(deviceRoot, "Include", `stm32h${status.architecture.device.match(/^STM32H(\d{3})/i)?.[1]?.toLowerCase() || "7xx"}xx.h`)}`,
+        checkedPath: status.architecture.deviceHeaderPath || path.join(deviceRoot, "Include"),
+      });
+      if (status.architecture.bspRequired && (!fileExists(path.join(bspRoot, "stm32h7xx_nucleo.h")) || !fileExists(path.join(bspRoot, "stm32h7xx_nucleo.c")))) diagnostics.push({
+        code: "QC1-H7-008", level: "error", title: "BSP_NUCLEO_H7_INTROUVABLE", message: "BSP STM32H7 Nucleo incomplet",
+        cause: `Ajoute le BSP STM32H7 Nucleo ou règle qc1.cubeH7Path. Fichiers attendus dans ${bspRoot}`,
+        checkedPath: bspRoot,
+      });
+    }
     for (const [code, title, message, checked, referenced] of [
       ["QC1-H755-010", "HAL_H7_INTROUVABLE", "HAL STM32H7 absent", status.architecture.halPath || path.join(status.driversPath, "STM32H7xx_HAL_Driver"), /STM32H7xx_HAL_Driver|USE_HAL_DRIVER/i.test(dependencyReferences)],
       ["QC1-H755-011", "CMSIS_INTROUVABLE", "CMSIS absent", status.architecture.cmsisPath || path.join(status.driversPath, "CMSIS"), /[\\/]CMSIS(?:[\\/]|$)/i.test(dependencyReferences)],
@@ -693,10 +800,10 @@ export function getProjectDiagnostics(status: Qc1Status): Qc1DiagnosticInfo[] {
     ] as const) if (referenced && !fileExists(checked)) diagnostics.push({ code, level: "warning", title, message, cause: "Dépendance référencée par CMake mais non confirmée localement; elle peut être fournie ailleurs. Le build vérifie ses dépendances", checkedPath: checked });
     if (status.architecture.bspRequired && !status.architecture.bspPath) diagnostics.push({
       code: "QC1-H755-013", level: "warning", title: "BSP_NUCLEO_H7_INTROUVABLE", message: "BSP NUCLEO H7 référencé mais absent",
-      cause: "Le BSP est optionnel pour un H755 générique et requis seulement lorsqu'il est utilisé", checkedPath: path.join(status.driversPath, "BSP", "STM32H7xx_Nucleo")
+      cause: "Le BSP est optionnel pour un projet H7 générique et requis seulement lorsqu'il est utilisé", checkedPath: path.join(status.driversPath, "BSP", "STM32H7xx_Nucleo")
     });
     if (!status.compilerOk) diagnostics.push({ code: "QC1-H755-020", level: "warning", title: "GCC_ARM_INTROUVABLE", message: "GNU Arm Embedded Toolchain non détecté par QC1", cause: "Le CMake natif peut encore fournir sa propre toolchain; le debug exige aussi GDB", checkedPath: status.compilerPath });
-    if (!status.ninjaOk) diagnostics.push({ code: "QC1-H755-021", level: "warning", title: "NINJA_INTROUVABLE", message: "Ninja non détecté par QC1", cause: "Un preset CubeMX Ninja nécessite un exécutable accessible", checkedPath: status.ninjaPath });
+    if (!status.ninjaOk && !(status.cubeIdeImport && status.makeOk)) diagnostics.push({ code: "QC1-H755-021", level: "warning", title: "NINJA_INTROUVABLE", message: "Ninja non détecté par QC1", cause: "L'import CubeIDE peut utiliser Make; un projet configuré avec un preset Ninja exige toutefois Ninja.", checkedPath: status.ninjaPath });
     if (!status.openocdOk) diagnostics.push({ code: "QC1-H755-022", level: "warning", title: "OPENOCD_INTROUVABLE", message: "OpenOCD non détecté", cause: "Le build reste valide, mais flash ELF et debug SWD ne sont pas disponibles", checkedPath: status.openocdPath });
     if (!status.debuggerOk) diagnostics.push({ code: "QC1-H755-023", level: "warning", title: "CORTEX_DEBUG_INTROUVABLE", message: "Cortex-Debug non détecté", cause: "Le build et le flash restent disponibles; le debug VS Code nécessite marus25.cortex-debug", checkedPath: "marus25.cortex-debug" });
     return diagnostics;
@@ -755,14 +862,15 @@ function getToolDiagnostic(status: Qc1Status, command: string): Qc1DiagnosticInf
     };
   }
 
-  if (!status.nativeCmakeOk && !status.ninjaOk && ["build", "clean", "rebuild", "tsmake", "flash", "debug", "run"].includes(action)) {
+  const internalGeneratorAvailable = status.ninjaOk || (status.cubeIdeImport && status.makeOk);
+  if (!status.nativeCmakeOk && !internalGeneratorAvailable && ["build", "clean", "rebuild", "tsmake", "flash", "debug", "run"].includes(action)) {
     return {
       code: "QC1-TOOL-004",
       level: "error",
-      title: "NINJA_INTROUVABLE",
-      message: "Ninja introuvable",
-      cause: "La chaîne CMake autonome nécessite Ninja fourni par Embedded Build Tools",
-      checkedPath: status.ninjaPath || "PATH"
+      title: "GENERATEUR_CMAKE_INTROUVABLE",
+      message: "Aucun générateur CMake intégré disponible",
+      cause: status.cubeIdeImport ? "Ninja ou Make est requis pour configurer l'import CubeIDE." : "Le moteur STM32F1 intégré nécessite Ninja fourni par Embedded Build Tools.",
+      checkedPath: status.ninjaPath || status.makePath || "PATH"
     };
   }
 
@@ -777,11 +885,11 @@ function getToolDiagnostic(status: Qc1Status, command: string): Qc1DiagnosticInf
     };
   }
 
-  if (!status.openocdOk && status.architecture.family === "stm32h755" && ["flash", "run"].includes(action)) {
+  if (!status.openocdOk && isStm32H7Family(status.architecture.family) && needsBothH755Targets(status.architecture) && ["flash", "run"].includes(action)) {
     return {
       code: "QC1-TOOL-005", level: "error", title: "OPENOCD_INTROUVABLE",
-      message: "OpenOCD requis pour le flash H755",
-      cause: "Le flash H755 sélectionne explicitement cpu0 ou cpu1; st-flash ne permet pas cette sélection QC1",
+      message: "OpenOCD requis pour le flash H7 dual-core",
+      cause: "Le flash dual-core sélectionne explicitement cpu0 ou cpu1; st-flash ne permet pas cette sélection QC1",
       checkedPath: status.openocdPath || "PATH"
     };
   }
@@ -808,6 +916,13 @@ function getToolDiagnostic(status: Qc1Status, command: string): Qc1DiagnosticInf
     checkedPath: "marus25.cortex-debug"
   };
 
+  if (action === "debug" && isStm32H7Family(status.architecture.family) && !status.openocdOk) return {
+    code: "QC1-TOOL-005", level: "error", title: "OPENOCD_INTROUVABLE",
+    message: "OpenOCD requis pour le debug STM32H7",
+    cause: "Cortex-Debug doit utiliser target/stm32h7x.cfg avec la sonde ST-LINK sélectionnée.",
+    checkedPath: status.openocdPath || "PATH",
+  };
+
   if (action === "debug" && !status.gdbOk) return {
     code: "QC1-TOOL-007", level: "error", title: "GDB_ARM_INTROUVABLE",
     message: "arm-none-eabi-gdb introuvable", cause: "Cortex-Debug nécessite GDB en plus du compilateur GCC",
@@ -819,13 +934,13 @@ function getToolDiagnostic(status: Qc1Status, command: string): Qc1DiagnosticInf
     code: "QC1-H755-024", level: "error", title: "COEUR_DEBUG_REQUIS", message: "Choisis Debug CM7 ou Debug CM4",
     cause: "QC1 ne lance pas un debug simultané dual-core non validé", checkedPath: status.projectPath
   };
-  if (core && status.architecture.family !== "stm32h755") return {
+  if (core && !isStm32H7Family(status.architecture.family)) return {
     code: "QC1-H755-014", level: "error", title: "COEUR_NON_DISPONIBLE", message: `${core.toUpperCase()} n'est pas disponible dans ce projet`,
-    cause: "Les commandes par cœur sont réservées aux projets STM32H755 reconnus", checkedPath: status.projectPath
+    cause: "Les commandes par cœur sont réservées aux projets STM32H7 reconnus", checkedPath: status.projectPath
   };
   if (core && !status.architecture[core].present) return {
     code: "QC1-H755-014", level: "error", title: "COEUR_NON_DISPONIBLE", message: `${core.toUpperCase()} n'est pas présent`,
-    cause: "Ce projet H755 est valide sans l'autre cœur, mais la commande demandée cible un firmware absent", checkedPath: status.projectPath
+    cause: "Ce projet H7 est valide sans l'autre cœur, mais la commande demandée cible un firmware absent", checkedPath: status.projectPath
   };
 
 
@@ -908,6 +1023,7 @@ export function getExecutionEnv(status: Qc1Status): NodeJS.ProcessEnv {
   return buildToolEnvironment([
     status.cmakeOk ? status.cmakePath : "",
     status.ninjaOk ? status.ninjaPath : "",
+    status.makeOk ? status.makePath : "",
     status.compilerOk ? status.compilerPath : "",
     status.gdbOk ? status.gdbPath : "",
     status.openocdOk ? status.openocdPath : "",
@@ -920,11 +1036,11 @@ function runStlinkProbe(status: Qc1Status): ReturnType<typeof probeStlink> {
   if (!vscode.workspace.isTrusted) return Promise.resolve({ exitCode: null, stdout: "", stderr: "Workspace non approuvé", status: "non testé" });
   return probeStlink({ family: status.architecture.family, dualCore: needsBothH755Targets(status.architecture),
     openocd: status.openocdOk ? status.openocdPath : undefined, stInfo: status.stlinkToolOk ? status.stlinkPath : undefined,
-    cwd: status.projectPath || getWorkspaceRoot(), env: getExecutionEnv(status) });
+    cwd: status.projectPath || getWorkspaceRoot(), env: getExecutionEnv(status), serialNumber: status.stlinkSerialNumber || undefined });
 }
 
 function needsBothH755Targets(architecture: Qc1TargetArchitecture): boolean {
-  return architecture.family === "stm32h755" && (architecture.coreMode === "dual" || architecture.coreMode === "cm4");
+  return isStm32H7Family(architecture.family) && (architecture.coreMode === "dual" || architecture.coreMode === "cm4");
 }
 
 // === COLLECTE DU RAPPORT DE DIAGNOSTIC =====================================
@@ -949,6 +1065,7 @@ async function collectDiagnosticToolReports(status: Qc1Status): Promise<Diagnost
   for (const [name, file, source, ok] of [
     ["cmake", status.cmakePath, status.cmakeSource, status.cmakeOk],
     ["ninja", status.ninjaPath, status.ninjaSource, status.ninjaOk],
+    ["make", status.makePath, status.makeGenerator || "PATH", status.makeOk],
     ["arm-none-eabi-gcc", status.compilerPath, status.compilerSource, status.compilerOk],
     ["arm-none-eabi-gdb", status.gdbPath, "toolchain/PATH", status.gdbOk],
     ["openocd", status.openocdPath, status.openocdSource, status.openocdOk],
@@ -1074,7 +1191,7 @@ function startOpenOcdTerminal(context: vscode.ExtensionContext): void {
   const terminal = vscode.window.createTerminal({
     name: "QC1 OpenOCD",
     shellPath: status.openocdPath,
-    shellArgs: getOpenOcdServerArgs(status.architecture.family, needsBothH755Targets(status.architecture)),
+    shellArgs: getOpenOcdServerArgs(status.architecture.family, needsBothH755Targets(status.architecture), status.stlinkSerialNumber || undefined),
     env: getExecutionEnv(status)
   });
   terminal.show();
@@ -1087,7 +1204,7 @@ type ProcessInvocation = {
   args: string[];
   tracksNinja?: boolean;
   core?: Qc1Core;
-  inputArtifact?: "elf" | "bin";
+  inputArtifact?: "elf" | "bin" | "h7Dual";
 };
 
 type SpawnedProcessResult = DiagnosticProcessResult & {
@@ -1102,7 +1219,107 @@ function cmakeDefinition(name: string, value: string): string {
 
 /** Affichage uniquement : les arguments sont passés séparément à spawn(), sans shell. */
 function formatInvocation(executable: string, args: string[]): string {
-  return [quoteArg(executable), ...args.map(quoteArg)].join(" ");
+  return redactStlinkSerials([quoteArg(executable), ...args.map(quoteArg)].join(" "));
+}
+
+function h7CoreBuildSettings(architecture: Qc1TargetArchitecture, core: Qc1Core): {
+  sources: string[];
+  includeDirectories: string[];
+  definitions: string[];
+  compileOptions: string[];
+  linkerScript: string;
+} {
+  const inspected = architecture[core];
+  const sources = [...inspected.sources];
+  const includeDirectories = [...inspected.includeDirectories];
+  const halSourceRoot = architecture.halPath ? path.join(architecture.halPath, "Src") : "";
+  if (halSourceRoot && fileExists(halSourceRoot)) {
+    const conf = inspected.headers.find((file) => path.basename(file).toLowerCase() === "stm32h7xx_hal_conf.h");
+    const enabled = new Set<string>();
+    for (const match of readText(conf || "").matchAll(/^\s*#\s*define\s+HAL_([A-Z0-9_]+)_MODULE_ENABLED\b/gm))
+      enabled.add(match[1].toUpperCase());
+    try {
+      for (const entry of fs.readdirSync(halSourceRoot, { withFileTypes: true })) {
+        if (!entry.isFile() || !/^stm32h7xx_hal(?:_[a-z0-9_]+)?\.c$/i.test(entry.name)) continue;
+        const module = entry.name.toLowerCase().match(/^stm32h7xx_hal_([a-z0-9_]+)\.c$/)?.[1];
+        const baseModule = module?.replace(/_ex$/, "").toUpperCase();
+        if (!module || enabled.has(baseModule || "") || enabled.has(module.toUpperCase())) sources.push(path.join(halSourceRoot, entry.name));
+      }
+    } catch { /* Dependency diagnostics report inaccessible HAL folders. */ }
+  }
+  if (architecture.bspRequired && architecture.bspPath) {
+    try {
+      const boardSources = fs.readdirSync(architecture.bspPath, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && /^stm32h7xx_nucleo\.c$/i.test(entry.name))
+        .map((entry) => path.join(architecture.bspPath, entry.name));
+      if (boardSources.length === 1) sources.push(boardSources[0]);
+    } catch { /* The dependency check reports a missing BSP. */ }
+  }
+  const dependencyIncludes = [
+    architecture.halPath && path.join(architecture.halPath, "Inc"),
+    architecture.cmsisPath && path.join(architecture.cmsisPath, "Include"),
+    architecture.cmsisDevicePath && path.join(architecture.cmsisDevicePath, "Include"),
+    architecture.bspPath,
+  ].filter((value): value is string => Boolean(value));
+  includeDirectories.push(...dependencyIncludes.filter((directory) => {
+    try { return fs.statSync(directory).isDirectory(); } catch { return false; }
+  }));
+  return {
+    sources: [...new Set(sources.filter((file) => fileExists(file)))],
+    includeDirectories: [...new Set(includeDirectories.filter((directory) => {
+      try { return fs.statSync(directory).isDirectory(); } catch { return false; }
+    }))],
+    definitions: [...new Set(inspected.definitions)],
+    compileOptions: [...inspected.compileOptions],
+    linkerScript: inspected.linkerScriptPath,
+  };
+}
+
+/** Replaces the configure-only report with evidence from a completed CubeIDE import build. */
+export async function writeH7BuildReport(status: Qc1Status, command: string): Promise<void> {
+  if (!status.cubeIdeImport || !isStm32H7Family(status.architecture.family)) return;
+  const selectedCore = coreFromCommand(command);
+  const cores = [status.architecture.cm7, status.architecture.cm4].filter(core => core.present);
+  const artifacts = cores.map(core => {
+    const elf = core.core === "cm7" ? status.cm7ElfPath : status.cm4ElfPath;
+    const requested = !selectedCore || selectedCore === core.core;
+    const bin = elf.replace(/\.elf$/i, ".bin");
+    const hex = elf.replace(/\.elf$/i, ".hex");
+    const map = path.join(path.dirname(elf || status.buildPath), "firmware.map");
+    const built = requested && [elf, bin, hex, map].every(fileExists);
+    const linker = core.linkerScriptPath ? inspectLinker(core.linkerScriptPath) : {};
+    return {
+      core: core.core.toUpperCase(),
+      buildStatus: !requested ? "not-requested" : built ? "built" : "artifacts-missing",
+      target: core.targetName,
+      sources: core.sources,
+      sharedSources: core.sources.filter(file => file.replace(/\\/g, "/").includes("/Common/")),
+      compileOptions: core.compileOptions,
+      definitions: core.definitions,
+      linkerScript: core.linkerScriptPath,
+      memoryRegions: linker.memory || [],
+      elf,
+      bin,
+      hex,
+      map,
+    };
+  });
+  const requestedArtifacts = artifacts.filter(item => item.buildStatus !== "not-requested");
+  const report = {
+    schemaVersion: 1,
+    status: requestedArtifacts.length > 0 && requestedArtifacts.every(item => item.buildStatus === "built") ? "built" : "incomplete",
+    project: status.projectName,
+    device: status.architecture.device,
+    board: status.architecture.board,
+    architecture: status.architecture.coreMode === "dual" ? "dual-core" : status.architecture.coreMode,
+    buildDirectory: status.buildPath,
+    command,
+    artifacts,
+  };
+  const reportPath = path.join(status.buildPath, "build-report.json");
+  const temporaryPath = `${reportPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.promises.writeFile(temporaryPath, JSON.stringify(report, null, 2) + "\n", "utf8");
+  await fs.promises.rename(temporaryPath, reportPath);
 }
 
 /**
@@ -1120,18 +1337,37 @@ export function buildProcessInvocations(status: Qc1Status, command: string): Pro
 
   if (!status.nativeCmakeOk) {
     const toolchainPath = path.join(status.cmakeSourcePath, "arm-none-eabi-toolchain.cmake");
+    const generator = status.ninjaOk ? "Ninja" : status.cubeIdeImport && status.makeOk ? status.makeGenerator : "Ninja";
+    const generatorPath = status.ninjaOk ? status.ninjaPath : status.cubeIdeImport && status.makeOk ? status.makePath : "";
     configureArgs.push(
-      "-G", "Ninja",
-      cmakeDefinition("CMAKE_MAKE_PROGRAM", status.ninjaPath),
+      "-G", generator,
       cmakeDefinition("CMAKE_TOOLCHAIN_FILE", toolchainPath),
       cmakeDefinition("QC1_PROJECT_ROOT", status.projectPath),
       cmakeDefinition("QC1_STARTUP", status.startupPath),
       cmakeDefinition("QC1_LINKER_SCRIPT", status.linkerScriptPath),
       cmakeDefinition("QC1_SOURCE_DIR", status.sourcePath)
     );
+    if (generatorPath) configureArgs.push(cmakeDefinition("CMAKE_MAKE_PROGRAM", generatorPath));
 
     if (status.compilerOk) {
       configureArgs.push(cmakeDefinition("QC1_ARM_GCC", status.compilerPath));
+    }
+
+    if (status.cubeIdeImport && isStm32H7Family(status.architecture.family)) {
+      configureArgs.push(cmakeDefinition("QC1_BUILD_H7", "ON"));
+      for (const coreName of ["cm7", "cm4"] as const) {
+        const coreArchitecture = status.architecture[coreName];
+        if (!coreArchitecture.present) continue;
+        const core = coreName.toUpperCase();
+        const settings = h7CoreBuildSettings(status.architecture, coreName);
+        configureArgs.push(
+          cmakeDefinition(`QC1_${core}_SOURCES`, settings.sources.join(";")),
+          cmakeDefinition(`QC1_${core}_INCLUDE_DIRS`, settings.includeDirectories.join(";")),
+          cmakeDefinition(`QC1_${core}_DEFINITIONS`, settings.definitions.join(";")),
+          cmakeDefinition(`QC1_${core}_COMPILE_OPTIONS`, settings.compileOptions.join(";")),
+          cmakeDefinition(`QC1_${core}_LINKER_SCRIPT`, settings.linkerScript),
+        );
+      }
     }
   }
 
@@ -1172,20 +1408,33 @@ export function buildProcessInvocations(status: Qc1Status, command: string): Pro
 
   const objcopyPath = objcopyPathForStatus(status);
 
-  const cores: Array<Qc1Core | undefined> = status.architecture.family === "stm32h755"
+  const cores: Array<Qc1Core | undefined> = isStm32H7Family(status.architecture.family)
     ? core ? [core] : [status.architecture.cm7.present ? "cm7" : undefined, status.architecture.cm4.present ? "cm4" : undefined].filter((value): value is Qc1Core => Boolean(value))
     : [undefined];
 
-  if (status.architecture.family === "stm32h755" && !status.openocdOk)
-    throw new Error("OpenOCD requis pour sélectionner cpu0/cpu1 avant le flash H755.");
+  if (isStm32H7Family(status.architecture.family) && needsBothH755Targets(status.architecture) && !status.openocdOk)
+    throw new Error("OpenOCD requis pour sélectionner cpu0/cpu1 avant le flash H7 dual-core.");
   if (status.openocdOk) {
+    if (isStm32H7Family(status.architecture.family) && needsBothH755Targets(status.architecture) && !core) {
+      invocations.push({
+        phase: "flashing",
+        label: "Flash et vérification CM7 + CM4, puis reset",
+        executable: status.openocdPath,
+        args: getOpenOcdMultiProgramArgs([
+          { core: "cm7", elfPath: status.cm7ElfPath },
+          { core: "cm4", elfPath: status.cm4ElfPath },
+        ], status.architecture.family, status.stlinkSerialNumber || undefined),
+        inputArtifact: "h7Dual",
+      });
+      return invocations;
+    }
     for (const targetCore of cores) {
       const elf = targetCore === "cm7" ? status.cm7ElfPath : targetCore === "cm4" ? status.cm4ElfPath : status.elfPath;
       invocations.push({
         phase: "flashing",
         label: `Flash ${targetCore?.toUpperCase() || "STM32"} avec OpenOCD`,
         executable: status.openocdPath,
-        args: getOpenOcdProgramArgs(elf, status.architecture.family, needsBothH755Targets(status.architecture), targetCore),
+        args: getOpenOcdProgramArgs(elf, status.architecture.family, needsBothH755Targets(status.architecture), targetCore, status.stlinkSerialNumber || undefined, isKnownDualCoreH7Device(status.architecture.device)),
         core: targetCore,
         inputArtifact: "elf"
       });
@@ -1213,7 +1462,7 @@ export function buildProcessInvocations(status: Qc1Status, command: string): Pro
       phase: "flashing",
       label: `Flash ${targetCore?.toUpperCase() || "STM32"} avec st-flash`,
       executable: status.stFlashPath,
-      args: getStFlashWriteArgs(bin, flashOrigin),
+      args: getStFlashWriteArgs(bin, flashOrigin, status.stlinkSerialNumber || undefined),
       core: targetCore,
       inputArtifact: "bin"
     });
@@ -1304,6 +1553,7 @@ function syncDashboardState(context: vscode.ExtensionContext) {
       openocdDetected: status.openocdOk,
       debuggerDetected: status.debuggerOk,
       stlinkDetected: status.stlinkProbeOk,
+      stlinkSelectedProbe: stlinkSerialLabel(status.stlinkSerialNumber),
       stFlashInstalled: status.stFlashOk,
       stlinkProbeStatus: status.stlinkProbeStatus,
       stlinkModel: stlinkProbeModel,
@@ -1601,6 +1851,7 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
           await this.refreshRecentProjects();
           break;
         case "detectStlink": this.detectStlink(); break;
+        case "selectStlink": this.selectStlink(); break;
         case "openSerial": this.openSerial(); break;
         case "startOpenOcd": this.startOpenOcd(); break;
         case "openArtifact": {
@@ -1900,6 +2151,10 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
             cm4Bin: artifactSnapshot(status.cm4BinPath)
           },
           hardware: {
+            selectedProbe: stlinkSerialLabel(status.stlinkSerialNumber),
+            selectedMcuFamily: status.architecture.family,
+            targetFamilyFromOpenOcd: probe.targetFamily || "non confirmé",
+            boardDetectedFromProject: status.architecture.board,
             serialPort: status.serialPort || "non configuré/détecté",
             baudRate: status.baudRate,
             previousStlinkState: status.stlinkProbeStatus,
@@ -2003,12 +2258,124 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
     this.runStatus("detect-stlink");
   }
 
+  public selectStlink(): void {
+    if (this.buildRunning || this.probeRunning) {
+      this.postStatus("Attendez la fin de l'opération QC1 en cours.", "running");
+      return;
+    }
+    this.probeRunning = true;
+    void this.ensureStlinkSelection(true)
+      .then((serialNumber) => this.postStatus(serialNumber ? `Sonde mémorisée: ${stlinkSerialLabel(serialNumber)}` : "Sélection annulée", serialNumber ? "success" : "idle"))
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.appendOutput(message, "error");
+        this.postStatus("Sélection ST-Link impossible", "error");
+      })
+      .finally(() => { this.probeRunning = false; });
+  }
+
+  /** Inventory the adapters, remember one per project, and verify that its target matches. */
+  private async ensureStlinkSelection(forceSelection = false, status = getQc1Status(this.context)): Promise<string | undefined> {
+    if (!vscode.workspace.isTrusted) throw new Error("Approuve le workspace avant de sonder un ST-Link.");
+    if (!status.projectPath) throw new Error("Sélectionne un projet STM32 avant de choisir une sonde.");
+    if (!status.stlinkToolOk) throw new Error("st-info est requis pour distinguer les sondes. Configure qc1.stlinkPath, puis réessaie.");
+
+    const inventoryResult = await runProcess(status.stlinkPath, ["--probe"], {
+      cwd: status.projectPath,
+      env: getExecutionEnv(status),
+      timeoutMs: 8000,
+      maxBytes: 128 * 1024,
+    });
+    const inventoryOutput = `${inventoryResult.stdout}\n${inventoryResult.stderr}`;
+    const probes = readStlinkProbeInventory(inventoryOutput);
+    this.appendOutput(`$ ${formatInvocation(status.stlinkPath, ["--probe"])}`, "command");
+    if (inventoryOutput.trim()) this.appendOutput(redactStlinkSerials(inventoryOutput.trim()), "stdout");
+    if (inventoryResult.timedOut || (inventoryResult.exitCode !== 0 && probes.length === 0)) {
+      throw new Error(`Impossible d'inventorier les ST-Link (code ${inventoryResult.exitCode ?? "inconnu"}). Vérifie le pilote et les permissions USB.`);
+    }
+    if (probes.length === 0) throw new Error("Aucune sonde ST-Link avec numéro de série détectable. Le flash/debug est arrêté.");
+
+    const savedSerial = readProjectProbeSerial(this.context, status.projectPath);
+    let selected = !forceSelection && savedSerial ? probes.find((probe) => probe.serialNumber === savedSerial) : undefined;
+    if (!selected && !forceSelection && !savedSerial && probes.length === 1) selected = probes[0];
+    if (!selected) {
+      const savedMissing = Boolean(savedSerial && !probes.some((probe) => probe.serialNumber === savedSerial));
+      const choice = await vscode.window.showQuickPick(probes.map((probe) => ({
+        label: `${probe.description || "ST-LINK"}${probe.firmware ? ` · ${probe.firmware}` : ""}`,
+        description: `N° série ${probe.serialNumber}`,
+        detail: [probe.chipId ? `Chip ID ${probe.chipId}` : "Cible non décrite", status.projectName].filter(Boolean).join(" · "),
+        probe,
+      })), {
+        title: `Sonde ST-Link pour ${status.projectName}`,
+        placeHolder: savedMissing ? `La sonde mémorisée (${stlinkSerialLabel(savedSerial)}) est absente; choisis-en une explicitement.` : "Plusieurs sondes ou sélection manuelle : choisis le numéro de série à associer à ce projet.",
+        matchOnDescription: true,
+      });
+      selected = choice?.probe;
+    }
+    if (!selected) return undefined;
+    if (!isValidStlinkSerial(selected.serialNumber)) throw new Error("Le numéro de série ST-Link sélectionné n'est pas valide.");
+
+    if (status.openocdOk) {
+      const verification = await probeStlink({
+        family: status.architecture.family,
+        dualCore: needsBothH755Targets(status.architecture),
+        openocd: status.openocdPath,
+        serialNumber: selected.serialNumber,
+        cwd: status.projectPath,
+        env: getExecutionEnv(status),
+      });
+      const output = `${verification.stdout}\n${verification.stderr}`.trim();
+      if (output) this.appendOutput(redactStlinkSerials(output), verification.status === "OK" && !verification.warning ? "stdout" : "error");
+      const targetFamilyMatches = verification.targetFamily && (isStm32H7Family(status.architecture.family)
+        ? isStm32H7Family(verification.targetFamily)
+        : verification.targetFamily === status.architecture.family);
+      if (verification.status !== "OK" || verification.warning || !targetFamilyMatches) {
+        throw new Error(`OpenOCD n'a pas confirmé la sonde sélectionnée et la famille de cible ${status.architecture.family}. Aucun flash/debug lancé.`);
+      }
+    } else if (!probeMatchesFamily(selected, status.architecture.family)) {
+      throw new Error(`La cible décrite par ${stlinkSerialLabel(selected.serialNumber)} ne correspond pas à ${status.architecture.device}; OpenOCD est requis pour vérifier ce routage.`);
+    }
+
+    const state = this.context.workspaceState;
+    if (!state) throw new Error("Le stockage local de sélection ST-Link est indisponible; la sonde n'a pas été mémorisée.");
+    const key = projectProbeSelectionKey(status.projectPath);
+    const assignments = normalizeStlinkProbeAssignments(state.get<unknown>(PROBE_SELECTION_STORAGE_KEY, {}));
+    const retained = Object.entries(assignments).filter(([entryKey]) => entryKey !== key).slice(-49);
+    await state.update(PROBE_SELECTION_STORAGE_KEY, Object.fromEntries([...retained, [key, selected.serialNumber]]));
+
+    stlinkProbeStatus = "OK";
+    stlinkProbeModel = selected.firmware || readStlinkProbeModel(inventoryOutput);
+    stlinkCheckedAt = new Date().toLocaleString();
+    syncDashboardState(this.context);
+    refreshDashboard();
+    return selected.serialNumber;
+  }
+
   public openSerial(): void {
     openSerialTerminal(this.context);
   }
 
   public startOpenOcd(): void {
-    startOpenOcdTerminal(this.context);
+    if (this.buildRunning || this.probeRunning) { this.postStatus("Attendez la fin de l'opération QC1 en cours.", "running"); return; }
+    const initialStatus = getQc1Status(this.context);
+    const stableConfigurationFingerprint = operationConfigurationFingerprint(this.context, false);
+    this.probeRunning = true;
+    void this.ensureStlinkSelection(false, initialStatus)
+      .then((serialNumber) => {
+        if (!serialNumber) return;
+        assertOperationConfiguration(stableConfigurationFingerprint, operationConfigurationFingerprint(this.context, false));
+        const currentStatus = getQc1Status(this.context);
+        if (!probeSelectionMatchesProject(initialStatus.projectPath, currentStatus.projectPath, serialNumber, currentStatus.stlinkSerialNumber)) {
+          throw new Error("Le projet ou la sonde a changé pendant la sélection; OpenOCD n'a pas été démarré.");
+        }
+        startOpenOcdTerminal(this.context);
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.appendOutput(message, "error");
+        this.postStatus("Serveur OpenOCD non démarré", "error");
+      })
+      .finally(() => { this.probeRunning = false; });
   }
 
   /** Exécute un diagnostic et un probe ST-Link sans compiler le firmware. */
@@ -2048,7 +2415,7 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
           "Probe ST-Link",
           "Méthode: OpenOCD / st-info (voir résultats ci-dessous)",
           `Exit    : ${probeError ? getExitCode(probeError) ?? 1 : 0}`,
-          probeOutput.trim() || "--"
+          redactStlinkSerials(probeOutput.trim()) || "--"
         ].join("\n"), probeError ? "error" : "stdout");
         if (probeWarning) this.appendOutput(probeWarning, "error");
       } else if (measuring) {
@@ -2080,9 +2447,8 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
   private async runQC1(command: string): Promise<void> {
     if (!vscode.workspace.isTrusted) { this.postStatus("Workspace non approuvé", "error"); return; }
     const config = this.getConfig();
-    const toolStatus = getQc1Status(this.context);
+    let toolStatus = getQc1Status(this.context);
     const root = toolStatus.projectPath || getWorkspaceRoot();
-    const configurationFingerprint = operationConfigurationFingerprint();
     const action = command.split("-")[0];
 
     if (!root) {
@@ -2101,6 +2467,9 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
       this.postStatus("No workspace", "error");
       return;
     }
+
+    const stableConfigurationFingerprint = operationConfigurationFingerprint(this.context, false);
+    let configurationFingerprint = operationConfigurationFingerprint(this.context);
 
     if (config.autoClearOutput) {
       this.clearOutput();
@@ -2170,9 +2539,10 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
     };
     const executedCommands: string[] = [];
     let failedResult: SpawnedProcessResult | undefined;
+    let probePrepared = false;
 
     try {
-      if (toolStatus.nativeCmakeOk) {
+      if (toolStatus.cmakeProjectReady) {
         const query = path.join(toolStatus.buildPath, ".cmake", "api", "v1", "query", "client-qc1");
         await fs.promises.mkdir(query, { recursive: true });
         for (const name of ["codemodel-v2", "toolchains-v1"]) {
@@ -2181,25 +2551,42 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
         }
       }
       for (const invocation of invocations) {
-        assertOperationConfiguration(configurationFingerprint, operationConfigurationFingerprint());
+        assertOperationConfiguration(configurationFingerprint, operationConfigurationFingerprint(this.context));
+        if (invocation.phase === "flashing" && !probePrepared) {
+          const selectedSerial = await this.ensureStlinkSelection(false, getQc1Status(this.context));
+          if (!selectedSerial) throw new Error("Sélection ST-Link annulée; aucun flash lancé.");
+          assertOperationConfiguration(stableConfigurationFingerprint, operationConfigurationFingerprint(this.context, false));
+          toolStatus = getQc1Status(this.context);
+          if (toolStatus.stlinkSerialNumber !== selectedSerial) throw new Error("La sélection ST-Link a changé pendant la préparation; aucun flash lancé.");
+          configurationFingerprint = operationConfigurationFingerprint(this.context);
+          probePrepared = true;
+        }
         if (invocation.phase === "building" && coreFromCommand(command)) {
           const core = coreFromCommand(command)!;
-          const targets = readFileApi(toolStatus.buildPath, toolStatus.projectPath).targets.filter(target => !target.configuration || target.configuration === qc1Configuration().get<string>("buildType", "Debug"));
+          const targets = readFileApi(toolStatus.buildPath, toolStatus.cmakeSourcePath).targets.filter(target => !target.configuration || target.configuration === qc1Configuration().get<string>("buildType", "Debug"));
           invocation.args = coreBuildArguments(invocation.args, targets, core);
         }
         if (invocation.phase === "flashing") {
           const refreshed = getQc1Status(this.context);
           const refreshedElf = invocation.core === "cm7" ? refreshed.cm7ElfPath : invocation.core === "cm4" ? refreshed.cm4ElfPath : refreshed.elfPath;
           const refreshedBin = invocation.core === "cm7" ? refreshed.cm7BinPath : invocation.core === "cm4" ? refreshed.cm4BinPath : refreshed.binPath;
+          if (invocation.inputArtifact === "h7Dual" && (!fileExists(refreshed.cm7ElfPath) || !fileExists(refreshed.cm4ElfPath)))
+            throw new Error("Flash H7 dual-core arrêté : les deux ELF CM7 et CM4 doivent exister avant la programmation.");
           if (invocation.inputArtifact === "elf" && !fileExists(refreshedElf)) throw new Error(`ELF ${invocation.core?.toUpperCase() || "STM32"} introuvable: configure le projet pour alimenter la CMake File API ou règle qc1.${invocation.core ? `${invocation.core}ElfPath` : "elfPath"}.`);
           if (invocation.executable === toolStatus.openocdPath) {
-            invocation.args = getOpenOcdProgramArgs(refreshedElf, refreshed.architecture.family, needsBothH755Targets(refreshed.architecture), invocation.core);
+            invocation.args = invocation.inputArtifact === "h7Dual"
+              ? getOpenOcdMultiProgramArgs([
+                { core: "cm7", elfPath: refreshed.cm7ElfPath },
+                { core: "cm4", elfPath: refreshed.cm4ElfPath },
+              ], refreshed.architecture.family, refreshed.stlinkSerialNumber || undefined)
+              : getOpenOcdProgramArgs(refreshedElf, refreshed.architecture.family, needsBothH755Targets(refreshed.architecture), invocation.core, refreshed.stlinkSerialNumber || undefined, isKnownDualCoreH7Device(refreshed.architecture.device));
           } else if (invocation.executable === objcopyPathForStatus(toolStatus)) {
             invocation.args[3] = refreshedElf;
             invocation.args[4] = refreshedBin;
           } else if (invocation.inputArtifact === "bin") {
             if (!fileExists(refreshedBin)) throw new Error(`BIN ${invocation.core?.toUpperCase() || "STM32"} introuvable après objcopy/build.`);
-            invocation.args[2] = refreshedBin;
+            const flashAddress = invocation.args.at(-1) || "0x08000000";
+            invocation.args = getStFlashWriteArgs(refreshedBin, flashAddress, refreshed.stlinkSerialNumber || undefined);
           }
         }
         progressManager.setPhase(invocation.phase, invocation.label);
@@ -2212,14 +2599,16 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
           projectDir,
           environment,
           (chunk) => {
-            appendBounded(stdoutParts, chunk);
+            const safeChunk = redactStlinkSerials(chunk);
+            appendBounded(stdoutParts, safeChunk);
             if (invocation.tracksNinja) progressManager.consumeOutput(chunk);
-            this.appendOutput(chunk, "stdout");
+            this.appendOutput(safeChunk, "stdout");
           },
           (chunk) => {
-            appendBounded(stderrParts, chunk);
+            const safeChunk = redactStlinkSerials(chunk);
+            appendBounded(stderrParts, safeChunk);
             if (invocation.tracksNinja) progressManager.consumeOutput(chunk);
-            this.appendOutput(chunk, "stderr");
+            this.appendOutput(safeChunk, "stderr");
           }
         );
 
@@ -2227,16 +2616,26 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
           failedResult = result;
           break;
         }
+        if (invocation.phase === "building" && toolStatus.cubeIdeImport && isStm32H7Family(toolStatus.architecture.family)) {
+          await writeH7BuildReport(getQc1Status(this.context), command);
+        }
       }
       if (!failedResult && action === "debug") {
-        assertOperationConfiguration(configurationFingerprint, operationConfigurationFingerprint());
+        const selectedSerial = await this.ensureStlinkSelection(false, getQc1Status(this.context));
+        if (!selectedSerial) throw new Error("Sélection ST-Link annulée; aucune session de debug lancée.");
+        assertOperationConfiguration(stableConfigurationFingerprint, operationConfigurationFingerprint(this.context, false));
+        toolStatus = getQc1Status(this.context);
+        if (toolStatus.stlinkSerialNumber !== selectedSerial) throw new Error("La sélection ST-Link a changé pendant la préparation; aucun debug lancé.");
+        configurationFingerprint = operationConfigurationFingerprint(this.context);
+        assertOperationConfiguration(configurationFingerprint, operationConfigurationFingerprint(this.context));
         const requestedCore = coreFromCommand(command);
         const core = requestedCore || (toolStatus.architecture.coreMode === "cm7" ? "cm7" : toolStatus.architecture.coreMode === "cm4" ? "cm4" : undefined);
         const refreshed = getQc1Status(this.context);
         const executable = core === "cm7" ? refreshed.cm7ElfPath : core === "cm4" ? refreshed.cm4ElfPath : refreshed.elfPath;
         const label = core?.toUpperCase() || "STM32F1";
         if (!fileExists(executable)) throw new Error(`ELF ${label} introuvable après le build.`);
-        const debugConfiguration = getCortexDebugConfiguration(projectDir, executable, refreshed.architecture.family, core, needsBothH755Targets(refreshed.architecture)) as vscode.DebugConfiguration;
+        const debugDevice = refreshed.architecture.device.replace(/ZITx$/i, "ZI");
+        const debugConfiguration = getCortexDebugConfiguration(projectDir, executable, refreshed.architecture.family, core, needsBothH755Targets(refreshed.architecture), refreshed.stlinkSerialNumber || undefined, debugDevice) as vscode.DebugConfiguration;
         debugConfiguration.serverpath = refreshed.openocdPath;
         debugConfiguration.gdbPath = refreshed.gdbPath;
         const started = await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(vscode.Uri.file(projectDir)), debugConfiguration);
@@ -2742,6 +3141,9 @@ export async function activate(context: vscode.ExtensionContext) {
   }));
   context.subscriptions.push(vscode.commands.registerCommand("qc1.detectStlink", () => {
     provider.detectStlink();
+  }));
+  context.subscriptions.push(vscode.commands.registerCommand("qc1.selectStlink", () => {
+    provider.selectStlink();
   }));
   context.subscriptions.push(vscode.commands.registerCommand("qc1.openSerial", () => {
     provider.openSerial();

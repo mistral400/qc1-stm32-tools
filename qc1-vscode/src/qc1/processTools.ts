@@ -34,7 +34,9 @@ export interface ProcessResult {
   truncated: boolean;
 }
 /** Seul un code de sortie réel à zéro confirme le succès du processus. */
-export function processSucceeded(result: Pick<ProcessResult, "exitCode" | "error" | "timedOut">): boolean {
+export function processSucceeded(
+  result: Pick<ProcessResult, "exitCode" | "timedOut"> & { error?: unknown },
+): boolean {
   return result.exitCode === 0 && !result.error && !result.timedOut;
 }
 export function runProcess(

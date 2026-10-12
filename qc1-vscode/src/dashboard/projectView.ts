@@ -27,10 +27,11 @@ export function renderProjectView(state: DashboardState): string {
       <div class="path">${escapeHtml(discovery.selectedPath || state.project.workspacePath)}</div>
       ${row("Famille", active?.family || state.project.targetFamily)}
       ${row("MCU", active?.mcu || state.project.targetDevice)}${row("Carte", active?.board || "Inconnue — aucune carte déduite du MCU")}
+      ${active?.compatibleBoards?.length ? row("Carte compatible documentée", active.compatibleBoards.join(", ")) : ""}
       ${row("Architecture", active?.architecture || state.project.coreMode)}
       ${row("Cœurs", active?.cores.map((core) => core.name).join(" + ") || state.project.coreMode)}
       ${row("Build system", active?.buildSystem || "Non confirmé")}${row("Confiance", active ? `${active.confidence} / 100` : "Analyse statique à effectuer")}
-      ${active?.family === "STM32H7" ? row("H755 CM7 / CM4", `${active.cores.some((core) => core.id === "cm7") ? "CM7 présent" : "CM7 non confirmé"} · ${active.cores.some((core) => core.id === "cm4") ? "CM4 présent" : "CM4 non confirmé"} · ${active.architecture}`) : ""}
+      ${active?.family === "STM32H7" ? row("Cœurs H7 CM7 / CM4", `${active.cores.some((core) => core.id === "cm7") ? "CM7 présent" : "CM7 non confirmé"} · ${active.cores.some((core) => core.id === "cm4") ? "CM4 présent" : "CM4 non confirmé"} · ${active.architecture}`) : ""}
       <div class="actions">${action("discoverProjects", "Détecter les projets")}${action("rescanProjects", "Rescanner")}${action("chooseProjectFolder", "Choisir / changer de dossier")}${action("openProjectFolder", "Ouvrir le dossier", "", !state.project.projectDetected && !discovery.selectedPath)}${action("command", "Diagnostiquer", 'data-command="status"')}</div>
       <p class="scan-status ${discovery.status === "scanning" ? "busy" : ""}" role="status">${escapeHtml(discovery.message || "Détection manuelle, statique et bornée.")}</p>
       ${discovery.status === "scanning" ? action("cancelProjectScan", "Annuler le scan") : ""}

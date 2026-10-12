@@ -59,6 +59,8 @@ export interface ProjectCandidate {
   family?: string;
   mcu?: string;
   board?: string;
+  /** Board-level compatibility documented by the project vendor; not MCU identification. */
+  compatibleBoards?: string[];
   architecture: ProjectArchitecture;
   cores: ProjectCore[];
   buildSystem: ProjectBuildSystem;
@@ -137,8 +139,8 @@ const mcuRules: Array<{ family: string; matcher: RegExp; prefix: RegExp }> = [
   },
   {
     family: "STM32H7",
-    matcher: /STM32H755(?:ZIT6|ZIT[xX]|ZI|[xX]{2})?(?![A-Za-z0-9])/gi,
-    prefix: /^STM32H755/i,
+    matcher: /STM32H7\d{2}(?:[A-Za-z0-9x]*)?/gi,
+    prefix: /^STM32H7\d{2}/i,
   },
 ];
 
@@ -153,8 +155,18 @@ function canonicalMcu(value: string): string {
   return value
     .toUpperCase()
     .replace(/STM32F103XB$/, "STM32F103xB")
-    .replace(/STM32H755XX$/, "STM32H755xx")
-    .replace(/STM32H755ZITX$/, "STM32H755ZITx");
+    .replace(/(STM32H7\d{2})XX$/, "$1xx")
+    .replace(/(STM32H7\d{2})ZITX$/, "$1ZITx");
+}
+
+function boardFromText(text: string): string | undefined {
+  const board = text.match(/NUCLEO[-_ ]?H(?:7\d{2})ZI[-_ ]?Q/i)?.[0];
+  return board?.replace(/[_ ]/g, "-").toUpperCase();
+}
+
+function mcuFromBoard(board: string): string {
+  const device = board.match(/H(7\d{2})/i)?.[1];
+  return device ? "STM32" + device + "ZI" : "";
 }
 
 function mcuFamily(value: string): string | undefined {
@@ -179,6 +191,7 @@ function coreFromText(value: string): "CM7" | "CM4" | undefined {
 function filePriority(file: string): number {
   const name = path.basename(file);
   if (/^(?:Makefile|CMakeLists\.txt)$/i.test(name)) return 0;
+  if (/^\.(?:cproject|project)$/i.test(name)) return 1;
   if (/\.mk$|CMakePresets\.json$|\.cmake$/i.test(name)) return 1;
   if (/^startup_stm32.*\.[sS]$|\.ld$|\.ioc$/i.test(name)) return 2;
   if (/^system_stm32.*\.c$/i.test(name)) return 3;
@@ -600,13 +613,21 @@ export async function analyzeProject(
         const match = line.match(/^Mcu\.(?:Name|CPN)=\s*(.+?)\s*$/i);
         if (match) for (const mcu of findMcus(match[1])) addMcu(mcu, "ioc", record.file, 50);
         const board = line.match(/^(?:Board|ProjectManager\.Board|Mcu\.Board)=\s*(.+?)\s*$/i)?.[1];
-        if (board && /NUCLEO[-_ ]?H755ZI[-_ ]?Q/i.test(board))
-          addEvidence("board", record.file, "NUCLEO-H755ZI-Q", 20);
+        const boardName = boardFromText(board || record.text);
+        if (boardName) {
+          addEvidence("board", record.file, boardName, 20);
+          addMcu(mcuFromBoard(boardName), "mcu-reference", record.file, 20);
+        }
         const projectName = line.match(/^ProjectManager\.ProjectName=\s*(.+?)\s*$/i)?.[1];
         if (projectName) names.push(projectName);
       }
-      if (/NUCLEO[-_ ]?H755ZI[-_ ]?Q/i.test(record.text))
-        addMcu("STM32H755ZI", "ioc", record.file, 20);
+
+    if (name.toLowerCase() === ".project") {
+      const projectName = record.text.match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim();
+      if (projectName) names.push(projectName.replace(/_(?:CM7|CM4)$/i, ""));
+    }
+      const iocBoard = boardFromText(record.text);
+      if (iocBoard) addMcu(mcuFromBoard(iocBoard), "ioc", record.file, 20);
     }
 
     const startup = /^startup_stm32.*\.[sS]$/i.test(name);
@@ -669,20 +690,22 @@ export async function analyzeProject(
       if (/stm32f1/i.test(name)) addEvidence("system", record.file, "STM32F1 system file", 5);
       if (/stm32h7/i.test(name)) addEvidence("system", record.file, "STM32H7 system file", 5);
     }
-    if (/NUCLEO[-_ ]?H755ZI[-_ ]?Q/i.test(searchableText) && (isMake || isCmake || /\.ioc$/i.test(name))) {
-      addEvidence("board", record.file, "NUCLEO-H755ZI-Q", 20);
-      addMcu("STM32H755ZI", "mcu-reference", record.file, 20);
+    const detectedBoard = boardFromText(searchableText);
+    if (detectedBoard) {
+      addEvidence("board", record.file, detectedBoard, 20);
+      addMcu(mcuFromBoard(detectedBoard), "mcu-reference", record.file, 20);
     }
     if ((recordIndex + 1) % 32 === 0)
       await new Promise<void>((resolve) => setImmediate(resolve));
   }
 
-  const explicitBoardPath = [root, ...records.map((record) => record.file)].find((value) =>
-    /NUCLEO[-_ ]?H755ZI[-_ ]?Q/i.test(value),
-  );
+  const explicitBoardPath = [root, ...records.map((record) => record.file)].find((value) => boardFromText(value));
   if (explicitBoardPath && buildKinds.size) {
-    addEvidence("board", explicitBoardPath, "NUCLEO-H755ZI-Q", 20);
-    addMcu("STM32H755ZI", "mcu-reference", explicitBoardPath, 20);
+    const board = boardFromText(explicitBoardPath);
+    if (board) {
+      addEvidence("board", explicitBoardPath, board, 20);
+      addMcu(mcuFromBoard(board), "mcu-reference", explicitBoardPath, 20);
+    }
   }
 
   if (inventory.truncated)
@@ -762,11 +785,12 @@ export async function analyzeProject(
   const halReference = records.find((record) => /^(?:\s*#\s*include\s*[<"]stm32\w+_hal(?:_[^">]+)?\.h[>"])|\bUSE_HAL_DRIVER\b/im.test(
     withoutInactiveComments(record.text, /^(?:Makefile|CMakeLists\.txt)$|\.mk$|\.cmake$/i.test(path.basename(record.file))),
   ));
-  const cmsisReference = sourceRecords.find((record) => /^\s*#\s*include\s*[<"](?:core_cm[347]|cmsis_[^">]+|stm32(?:f103|f1xx|h755|h7xx)[^">]*)\.h[>"]/im.test(
+  const cmsisReference = sourceRecords.find((record) => /^\s*#\s*include\s*[<"](?:core_cm[347]|cmsis_[^">]+|stm32(?:f103|f1xx|h7\d{2})[a-z0-9]*)\.h[>"]/im.test(
     withoutInactiveComments(record.text, false),
   ));
-  const hasHal = inventory.files.some((file) => /stm32\w+_hal(?:_[^/\\]+)?\.h$/i.test(path.basename(file)));
-  const hasCmsis = inventory.files.some((file) => /^(?:core_cm[347]|cmsis_[^/\\]+|stm32(?:f103|f1xx|h755|h7xx)[^/\\]*)\.h$/i.test(path.basename(file)));
+  const hasHal = inventory.files.some((file) => /^stm32\w+_hal\.h$/i.test(path.basename(file)) ||
+    /(?:^|[\\/])STM32\w+_HAL_Driver[\\/]Inc[\\/]stm32\w+_hal\.h$/i.test(file));
+  const hasCmsis = inventory.files.some((file) => /^(?:core_cm[347]|cmsis_[^/\\]+|stm32(?:f103|f1xx|h7\d{2})[a-z0-9]*)\.h$/i.test(path.basename(file)));
   if (halReference && !hasHal)
     missingComponents.push({
       component: "HAL",
@@ -807,9 +831,9 @@ export async function analyzeProject(
       : buildKinds.has("cmake")
         ? "cmake"
         : "unknown";
-  const board = evidence.some((item) => item.type === "board" && item.value === "NUCLEO-H755ZI-Q")
-    ? "NUCLEO-H755ZI-Q"
-    : undefined;
+  const board = evidence.find((item) => item.type === "board")?.value;
+  const compatibleBoards = board === "NUCLEO-H745ZI-Q" && selected.family === "STM32H7"
+    ? ["NUCLEO-H755ZI-Q"] : [];
   const uniqueMissing = missingComponents.filter(
     (item, index, all) =>
       all.findIndex((candidate) =>
@@ -824,6 +848,7 @@ export async function analyzeProject(
     family: selected.family,
     mcu: selected.mcu,
     board,
+    compatibleBoards,
     architecture,
     cores,
     buildSystem,
@@ -836,7 +861,7 @@ export async function analyzeProject(
 
 function isProjectMarker(file: string): boolean {
   const name = path.basename(file);
-  return /^(?:Makefile|CMakeLists\.txt)$/i.test(name) || /\.ioc$/i.test(name);
+  return /^(?:Makefile|CMakeLists\.txt|\.cproject)$/i.test(name) || /\.ioc$/i.test(name);
 }
 
 function isInside(parent: string, child: string): boolean {
@@ -856,7 +881,15 @@ export async function discoverProjects(
     const inventory = await inventoryRoot(root, options);
     const markers = inventory.files.filter(isProjectMarker);
     if (markers.length) {
-      for (const marker of markers) candidateRoots.add(path.dirname(marker));
+      for (const marker of markers) {
+        const coreDirectory = path.dirname(marker);
+        const ideDirectory = path.dirname(coreDirectory);
+        candidateRoots.add(path.basename(marker).toLowerCase() === ".cproject" &&
+          /^cm[47]$/i.test(path.basename(coreDirectory)) &&
+          path.basename(ideDirectory).toLowerCase() === "stm32cubeide"
+          ? path.dirname(ideDirectory)
+          : path.dirname(marker));
+      }
     } else {
       candidateRoots.add(root);
     }

@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const { getDashboardHtml, renderDashboardViews } = require("../out/dashboard/dashboardHtml");
+const { renderToolsView } = require("../out/dashboard/toolsView");
 const { defaultDashboardState } = require("../out/dashboard/dashboardState");
 const { availableProjectCommands } = require("../out/dashboard/buildView");
 const { dashboardClient } = require("../out/dashboard/dashboardClient");
@@ -34,6 +35,17 @@ test("navigation has five real pages and context actions preserve F1/H755 modes"
   assert.ok(dual.includes("build") && dual.includes("flash") && dual.includes("debug-cm7") && dual.includes("debug-cm4"));
   assert.equal(dual.includes("debug"), false);
   assert.deepEqual(availableProjectCommands(defaultDashboardState), []);
+});
+
+test("project view shows documented H745 project compatibility without changing its MCU identity", () => {
+  const state = stateFor("STM32H7", ["cm7", "cm4"]);
+  state.projectDiscovery.activeCandidate.mcu = "STM32H745ZITx";
+  state.projectDiscovery.activeCandidate.board = "NUCLEO-H745ZI-Q";
+  state.projectDiscovery.activeCandidate.compatibleBoards = ["NUCLEO-H755ZI-Q"];
+  const html = getDashboardHtml(state);
+  assert.match(html, /STM32H745ZITx/);
+  assert.match(html, /NUCLEO-H755ZI-Q/);
+  assert.match(html, /Carte compatible documentée/);
 });
 
 test("all project values are escaped and never interpolated into inline JavaScript", () => {
@@ -68,7 +80,17 @@ test("message parser validates command and settings shapes and rejects arbitrary
   assert.equal(message.arbitrary, undefined);
   assert.deepEqual(message.discoveryRoots, ["~/Code"]);
   assert.deepEqual(parseWebviewMessage({ type: "useRecentProject", projectPath: "external" }), { type: "useRecentProject", projectPath: "external" });
+  assert.deepEqual(parseWebviewMessage({ type: "selectStlink" }), { type: "selectStlink" });
   assert.equal(parseWebviewMessage({ type: "openDiagnosticFile", index: -1 }), undefined);
+});
+
+test("tools dashboard shows per-project probe selection and exposes a selection action", () => {
+  const state = structuredClone(defaultDashboardState);
+  state.environment.stlinkSelectedProbe = "ST-LINK …3030";
+  const html = renderToolsView(state);
+  assert.match(html, /Sonde sélectionnée pour ce projet/);
+  assert.match(html, /ST-LINK …3030/);
+  assert.match(html, /data-action="selectStlink"/);
 });
 
 function clientHarness() {
@@ -98,6 +120,9 @@ test("client route persists, click messages are mapped, and settings submit is c
   const button = client.node("button"); button.dataset = { action: "useProject", path: `C:\\Code\\l'app` };
   client.events.click({ target: button });
   assert.equal(client.messages.at(-1).projectPath, `C:\\Code\\l'app`);
+  button.dataset = { action: "selectStlink" };
+  client.events.click({ target: button });
+  assert.equal(client.messages.at(-1).type, "selectStlink");
   button.dataset = { panel: "buildPanel" }; client.events.click({ target: button });
   assert.equal(client.persistent().activePanel, "buildPanel");
   client.node("projectPathInput").value = "~/Code/firmware";
@@ -130,10 +155,11 @@ test("scan roots expand home syntax but never expand into whole-machine scans", 
 });
 
 test("normalizes tools from the existing status without inferring a connected ST-Link", () => {
-  const tools = normalizeTools({ compilerOk: true, compilerPath: "/gcc", compilerSource: "PATH", gdbOk: false, cmakeOk: false, ninjaOk: false, openocdOk: false, stlinkToolOk: true, stlinkPath: "/st-info", debuggerOk: false });
+  const tools = normalizeTools({ compilerOk: true, compilerPath: "/gcc", compilerSource: "PATH", gdbOk: false, cmakeOk: false, ninjaOk: false, makeOk: false, makeGenerator: "", makePath: "Not found", openocdOk: false, stlinkToolOk: true, stlinkPath: "/st-info", debuggerOk: false });
   assert.equal(tools.find((tool) => tool.name === "ST-Link CLI").status, "OK");
   assert.equal(tools.find((tool) => tool.name === "GDB").status, "Manquant");
-  assert.equal(tools.length, 7);
+  assert.equal(tools.find((tool) => tool.name === "Make").status, "Manquant");
+  assert.equal(tools.length, 8);
   const view = renderDashboardViews(defaultDashboardState).toolsContent;
   assert.ok(view.includes("Inconnu"));
   assert.ok(!view.includes(">Connecté<"));
