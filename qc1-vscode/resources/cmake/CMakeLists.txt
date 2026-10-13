@@ -7,6 +7,103 @@ if(NOT QC1_PROJECT_ROOT)
 endif()
 
 cmake_path(ABSOLUTE_PATH QC1_PROJECT_ROOT NORMALIZE OUTPUT_VARIABLE QC1_ROOT)
+
+if(QC1_BUILD_H7)
+  function(qc1_json_escape output input)
+    string(REPLACE "\\" "\\\\" value "${input}")
+    string(REPLACE "\"" "\\\"" value "${value}")
+    string(REPLACE "\r" "\\r" value "${value}")
+    string(REPLACE "\n" "\\n" value "${value}")
+    set(${output} "${value}" PARENT_SCOPE)
+  endfunction()
+
+  function(qc1_add_h7_core target core)
+    set(source_var "QC1_${core}_SOURCES")
+    set(include_var "QC1_${core}_INCLUDE_DIRS")
+    set(definition_var "QC1_${core}_DEFINITIONS")
+    set(option_var "QC1_${core}_COMPILE_OPTIONS")
+    set(linker_var "QC1_${core}_LINKER_SCRIPT")
+    set(sources "${${source_var}}")
+    set(include_dirs "${${include_var}}")
+    set(definitions "${${definition_var}}")
+    set(compile_options "${${option_var}}")
+    set(linker_script "${${linker_var}}")
+    if(NOT sources)
+      return()
+    endif()
+    if(NOT linker_script OR NOT EXISTS "${linker_script}")
+      message(FATAL_ERROR "QC1 ${core} linker script is missing or ambiguous")
+    endif()
+    if(NOT compile_options)
+      message(FATAL_ERROR "QC1 ${core} CPU/FPU/ABI options were not resolved")
+    endif()
+    foreach(source IN LISTS sources)
+      if(NOT EXISTS "${source}")
+        message(FATAL_ERROR "QC1 ${core} source is missing: ${source}")
+      endif()
+    endforeach()
+
+    set(output_directory "${CMAKE_BINARY_DIR}/${core}")
+    file(MAKE_DIRECTORY "${output_directory}")
+    add_executable(${target} ${sources})
+    set_target_properties(${target} PROPERTIES
+      OUTPUT_NAME firmware
+      SUFFIX ".elf"
+      RUNTIME_OUTPUT_DIRECTORY "${output_directory}"
+    )
+    target_include_directories(${target} PRIVATE ${include_dirs})
+    target_compile_definitions(${target} PRIVATE ${definitions})
+    target_compile_options(${target} PRIVATE
+      ${compile_options}
+      -ffunction-sections
+      -fdata-sections
+      -fno-common
+    )
+    target_link_options(${target} PRIVATE
+      ${compile_options}
+      --specs=nano.specs
+      --specs=nosys.specs
+      "-T${linker_script}"
+      "-Wl,-Map=${output_directory}/firmware.map,--cref"
+      -Wl,--gc-sections
+      -Wl,--print-memory-usage
+      -Wl,--start-group
+      -lc
+      -lm
+      -Wl,--end-group
+    )
+    add_custom_command(TARGET ${target} POST_BUILD
+      COMMAND "${CMAKE_OBJCOPY}" -O ihex "$<TARGET_FILE:${target}>" "${output_directory}/firmware.hex"
+      COMMAND "${CMAKE_OBJCOPY}" -O binary -S "$<TARGET_FILE:${target}>" "${output_directory}/firmware.bin"
+      COMMAND "${CMAKE_SIZE}" "$<TARGET_FILE:${target}>"
+      COMMENT "Generating ${core}/firmware.bin and ${core}/firmware.hex"
+    )
+    qc1_json_escape(linker_json "${linker_script}")
+    qc1_json_escape(output_json "${output_directory}")
+    string(REPLACE ";" " " flags_text "${compile_options}")
+    qc1_json_escape(flags_json "${flags_text}")
+    if(QC1_REPORT_ENTRIES)
+      set(report_separator ",\n")
+    else()
+      set(report_separator "")
+    endif()
+    set(QC1_REPORT_ENTRIES "${QC1_REPORT_ENTRIES}${report_separator}    {\"core\": \"${core}\", \"target\": \"${target}\", \"elf\": \"$<TARGET_FILE:${target}>\", \"bin\": \"${output_json}/firmware.bin\", \"hex\": \"${output_json}/firmware.hex\", \"map\": \"${output_json}/firmware.map\", \"linkerScript\": \"${linker_json}\", \"compileOptions\": \"${flags_json}\"}" PARENT_SCOPE)
+    message(STATUS "QC1 ${core}: ${sources}")
+    message(STATUS "QC1 ${core} linker: ${linker_script}")
+    message(STATUS "QC1 ${core} flags: ${compile_options}")
+  endfunction()
+
+  qc1_add_h7_core(firmware_cm7 CM7)
+  qc1_add_h7_core(firmware_cm4 CM4)
+  if(NOT TARGET firmware_cm7 AND NOT TARGET firmware_cm4)
+    message(FATAL_ERROR "QC1 H7 import has no configured CM7 or CM4 sources")
+  endif()
+  qc1_json_escape(project_root_json "${QC1_ROOT}")
+  file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/build-report.json" CONTENT "{\n  \"schemaVersion\": 1,\n  \"status\": \"configured\",\n  \"projectRoot\": \"${project_root_json}\",\n  \"artifacts\": [\n${QC1_REPORT_ENTRIES}\n  ]\n}\n")
+  message(STATUS "QC1 H7 project root: ${QC1_ROOT}")
+  return()
+endif()
+
 if(NOT QC1_SOURCE_DIR)
   if(EXISTS "${QC1_ROOT}/Core/Src")
     set(QC1_SOURCE_DIR "${QC1_ROOT}/Core/Src")

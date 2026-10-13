@@ -14,6 +14,15 @@ function array(value: unknown): Record<string, unknown>[] {
 function str(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
+function samePath(left: string, right: string): boolean {
+  const normalize = (value: string): string => {
+    let resolved = path.resolve(value);
+    if (process.platform !== "win32") return resolved;
+    try { resolved = fs.realpathSync.native(resolved); } catch { /* keep normalized input */ }
+    return resolved.normalize("NFC").toLowerCase();
+  };
+  return normalize(left) === normalize(right);
+}
 export interface ConfiguredTarget {
   name: string;
   configuration: string;
@@ -23,6 +32,7 @@ export interface ConfiguredTarget {
   includes: string[];
   definitions: string[];
   fragments: string[];
+  compileFragments?: string[];
 }
 export interface FileApiSnapshot {
   status: string;
@@ -89,7 +99,7 @@ export function readFileApi(
         paths = object(model.paths);
       result.source = str(paths.source);
       result.build = str(paths.build) || buildDirectory;
-      if (path.resolve(result.source) !== path.resolve(projectRoot)) {
+      if (!samePath(result.source, projectRoot)) {
         result.status = "stale: source directory differs";
         continue;
       }
@@ -114,6 +124,7 @@ export function readFileApi(
             definitions: groups
               .flatMap((g) => array(g.defines).map((d) => str(d.define)))
               .slice(0, 500),
+            compileFragments: groups.map(g => array(g.compileCommandFragments).map(f => str(f.fragment)).join(" ")),
             fragments: [
               ...groups.flatMap((g) => array(g.compileCommandFragments)),
               ...array(object(target.link).commandFragments),

@@ -154,7 +154,7 @@ export function inspectCmake(
       result.unresolved.push(`External reference: ${requested}`);
       return;
     }
-    const spelling = checkSpelling(requested);
+    const spelling = checkSpelling(requested, root);
     if (spelling.mismatch) {
       const issue = finding(
         "QC1-PATH-001",
@@ -256,6 +256,7 @@ export function inspectCmake(
       if (command.name === "project" && a[0]) {
         if (depth === 0) result.projectName = a[0];
         variables.PROJECT_NAME = [a[0]];
+        variables.CMAKE_PROJECT_NAME = [a[0]];
       }
       if (
         command.name === "file" &&

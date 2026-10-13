@@ -34,6 +34,10 @@ function getOsLabel(platform) {
 }
 // Premier état affiché avant la détection du projet ou le lancement d'une commande.
 exports.defaultDashboardState = {
+    recentProjects: [],
+    tools: [],
+    diagnostics: [],
+    artifacts: [],
     currentAction: "Idle",
     projectName: "--",
     lastCommand: "--",
@@ -119,7 +123,14 @@ exports.defaultDashboardState = {
         stlinkDetected: false,
         stFlashInstalled: false,
         stlinkProbeStatus: "non testé",
+        stlinkSelectedProbe: "Non sélectionnée",
         cmakeDetected: false
+    },
+    projectDiscovery: {
+        status: "idle",
+        message: "",
+        candidates: [],
+        selectedPath: ""
     }
 };
 /**

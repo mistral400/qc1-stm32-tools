@@ -99,6 +99,28 @@ test("detects a CubeMX STM32H755 dual-core project from independent evidence", (
   assert.deepEqual(architecture.cm4.expectedFlags, ["-mcpu=cortex-m4", "-mthumb", "-mfpu=fpv4-sp-d16", "-mfloat-abi=hard"]);
 });
 
+test("recognizes H745, H747, H755 and H757 without conflating the H7 family with one exact MCU", (t) => {
+  for (const device of ["STM32H745ZITx", "STM32H747XITx", "STM32H755ZITx", "STM32H757XITx"]) {
+    const root = fixture();
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    write(path.join(root, "board.ioc"), `Mcu.Name=${device}\n`);
+    write(path.join(root, "Common", "Src", "system_stm32h7xx.c"));
+    for (const core of ["CM7", "CM4"]) {
+      write(path.join(root, core, "Src", "main.c"));
+      write(path.join(root, core, "Startup", `startup_${device.toLowerCase()}_${core}.s`));
+      write(path.join(root, core, `${device}_FLASH_${core}.ld`));
+    }
+    const architecture = inspectStm32Project(root).architecture;
+    assert.equal(architecture.family, device.includes("H755") ? "stm32h755" : "stm32h7");
+    assert.equal(architecture.device.toUpperCase(), device.toUpperCase());
+    assert.equal(architecture.coreMode, "dual");
+    assert.match(architecture.cm7.startupPath, /CM7/);
+    assert.match(architecture.cm4.startupPath, /CM4/);
+    assert.match(architecture.cm7.linkerScriptPath, /CM7/);
+    assert.match(architecture.cm4.linkerScriptPath, /CM4/);
+  }
+});
+
 test("distinguishes valid H755 CM7-only and CM4-only projects", (t) => {
   const cm7Root = fixture();
   const cm4Root = fixture();

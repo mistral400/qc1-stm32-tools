@@ -11,7 +11,8 @@ import {
   ProjectScan,
   inside,
 } from "./filesystem";
-import { inspectTargetArchitecture, Qc1TargetArchitecture } from "./targetArchitecture";
+import { applyCoreBuildMetadata, readCoreBuildMetadata, configuredCoreTarget } from "./coreBuild";
+import { inspectTargetArchitecture, isStm32H7Family, Qc1TargetArchitecture } from "./targetArchitecture";
 
 export type Qc1ProjectLayout =
   | "native-cmake"
@@ -51,6 +52,7 @@ export function readCmakeProjectName(file: string): string {
 export function inspectStm32Project(
   root: string,
   buildDirectory?: string,
+  configuredCubeH7Root = "",
 ): Qc1ProjectInspection {
   const scan = root
     ? scanProject(root)
@@ -114,11 +116,12 @@ export function inspectStm32Project(
   );
   const has = (pattern: RegExp): boolean =>
     markers.some((f) => pattern.test(path.basename(f)));
+  const hasCubeIdeProject = files.some((file) => path.basename(file).toLowerCase() === ".cproject");
   const layout: Qc1ProjectLayout = has(/^platformio\.ini$/i)
     ? "platformio"
     : nativeCmakePath
       ? "native-cmake"
-      : has(/^\.cproject$/)
+      : has(/^\.cproject$/) || hasCubeIdeProject
         ? "stm32cubeide"
         : has(/\.ioc$/i)
           ? "cubemx"
@@ -130,8 +133,21 @@ export function inspectStm32Project(
                 : "bare-metal"
               : "unknown";
   const findings = [...scan.findings, ...cmake.findings];
-  const architecture = inspectTargetArchitecture(root, scan, cmake);
-  if (startupCandidates.length > 1 && referencedStartup.length !== 1)
+  const architecture = inspectTargetArchitecture(root, scan, cmake, configuredCubeH7Root);
+  if (buildDirectory && isStm32H7Family(architecture.family)) {
+    const metadata = readCoreBuildMetadata(root, buildDirectory, cmake.cache.CMAKE_BUILD_TYPE || "Debug");
+    applyCoreBuildMetadata(architecture, metadata);
+    if (metadata.buildTargets.length && metadata.buildTargets.some(target => configuredCoreTarget(metadata.buildTargets, "cm7") === target.name || configuredCoreTarget(metadata.buildTargets, "cm4") === target.name)) {
+      const unknown = findings.find(item => item.title === "TARGET_UNKNOWN");
+      if (unknown) {
+        unknown.title = "TARGET_STATIC_UNRESOLVED";
+        unknown.message = "La cible n'est pas déduite du texte CMake; la File API confirme les cibles configurées.";
+      }
+    }
+  }
+  const dualStartupsResolved = architecture.coreMode === "dual" && Boolean(architecture.cm7.startupPath && architecture.cm4.startupPath);
+  const dualLinkersResolved = architecture.coreMode === "dual" && Boolean(architecture.cm7.linkerScriptPath && architecture.cm4.linkerScriptPath);
+  if (startupCandidates.length > 1 && referencedStartup.length !== 1 && !dualStartupsResolved)
     findings.push(
       finding(
         "QC1-PRJ-006",
@@ -140,7 +156,7 @@ export function inspectStm32Project(
         root,
       ),
     );
-  if (linkerCandidates.length > 1 && referencedLinker.length !== 1)
+  if (linkerCandidates.length > 1 && referencedLinker.length !== 1 && !dualLinkersResolved)
     findings.push(
       finding(
         "QC1-PRJ-007",
@@ -150,6 +166,10 @@ export function inspectStm32Project(
       ),
     );
   const header = files.find((f) => /\.h$/i.test(f));
+  const cubeIdeProjectNames = files.filter((file) => path.basename(file) === ".project" && /(?:^|[/\\])STM32CubeIDE[/\\]CM[47][/\\]/i.test(file))
+    .map((file) => readText(file, 128 * 1024).match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim() || "")
+    .filter(Boolean);
+  const cubeIdeProjectName = cubeIdeProjectNames[0]?.replace(/_(?:CM7|CM4)$/i, "") || "";
   return {
     root,
     layout,
@@ -160,7 +180,7 @@ export function inspectStm32Project(
     incPath: header ? path.dirname(header) : "",
     startupPath: pick(referencedStartup, startupCandidates),
     linkerScriptPath: pick(referencedLinker, linkerCandidates),
-    projectName: cmake.executableTargets[0] || cmake.projectName,
+    projectName: cmake.executableTargets[0] || (cmake.projectName !== "firmware" ? cmake.projectName : cubeIdeProjectName || cmake.projectName),
     sources,
     startupCandidates,
     linkerCandidates,
@@ -181,6 +201,12 @@ export function isUsableStm32Project(
   inspection: Qc1ProjectInspection,
 ): boolean {
   if (inspection.nativeCmakePath) return true;
+  if (inspection.architecture.coreMode === "dual") {
+    return ["cm7", "cm4"].every((core) => {
+      const item = inspection.architecture[core as "cm7" | "cm4"];
+      return item.present && item.sources.length > 0 && Boolean(item.startupPath && item.linkerScriptPath);
+    });
+  }
   return (
     inspection.layout !== "unknown" &&
     Boolean(
@@ -201,7 +227,17 @@ export function findStm32Project(
         path.basename(f),
       ) || /\.ioc$/i.test(f),
   );
-  const roots = [...new Set(markers.map((f) => path.dirname(f)))].sort(
+  const markerRoot = (file: string): string => {
+    const coreDirectory = path.dirname(file);
+    const ideDirectory = path.dirname(coreDirectory);
+    if (path.basename(file).toLowerCase() === ".cproject" &&
+      /^cm[47]$/i.test(path.basename(coreDirectory)) &&
+      path.basename(ideDirectory).toLowerCase() === "stm32cubeide") {
+      return path.dirname(ideDirectory);
+    }
+    return path.dirname(file);
+  };
+  const roots = [...new Set(markers.map(markerRoot))].sort(
     (a, b) => a.length - b.length,
   );
   const candidates = roots

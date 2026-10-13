@@ -81,19 +81,20 @@ export function readText(file: string, maxBytes = 512 * 1024): string {
     return "";
   }
 }
-export function checkSpelling(requested: string): {
+export function checkSpelling(requested: string, scopeRoot = ""): {
   exists: boolean;
   actual: string;
   mismatch: boolean;
   ambiguous: boolean;
 } {
   const absolute = path.resolve(requested);
-  let current = path.parse(absolute).root;
+  const boundary = scopeRoot ? path.resolve(scopeRoot) : path.parse(absolute).root;
+  if (scopeRoot && !inside(boundary, absolute))
+    return { exists: fs.existsSync(absolute), actual: absolute, mismatch: false, ambiguous: false };
+  let current = boundary;
   let mismatch = false;
-  for (const segment of absolute
-    .slice(current.length)
-    .split(path.sep)
-    .filter(Boolean)) {
+  const relative = path.relative(boundary, absolute);
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
     let entries: string[];
     try {
       entries = fs.readdirSync(current);

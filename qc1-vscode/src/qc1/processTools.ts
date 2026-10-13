@@ -4,6 +4,27 @@ import * as path from "path";
 import * as os from "os";
 import { spawn, ChildProcessWithoutNullStreams } from "child_process";
 
+/** Native PATH entries are not shell-quoted, including directories with spaces. */
+export function buildToolEnvironment(
+  executables: string[], base: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const api = platform === "win32" ? path.win32 : path.posix;
+  const env = { ...base };
+  const keys = Object.keys(env).filter(key => platform === "win32" ? key.toUpperCase() === "PATH" : key === "PATH");
+  const existing = keys.map(key => env[key]).filter(Boolean);
+  for (const key of keys) delete env[key];
+  const directories = executables.filter(file => file && api.isAbsolute(file)).map(file => api.dirname(file));
+  const seen = new Set<string>();
+  env.PATH = [...directories, ...existing.flatMap(value => value!.split(api.delimiter))].filter(entry => {
+    const key = platform === "win32" ? entry.toLowerCase() : entry;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).join(api.delimiter);
+  return env;
+}
+
 export interface ProcessResult {
   exitCode: number | null;
   stdout: string;
@@ -11,6 +32,12 @@ export interface ProcessResult {
   timedOut: boolean;
   error?: string;
   truncated: boolean;
+}
+/** Seul un code de sortie réel à zéro confirme le succès du processus. */
+export function processSucceeded(
+  result: Pick<ProcessResult, "exitCode" | "timedOut"> & { error?: unknown },
+): boolean {
+  return result.exitCode === 0 && !result.error && !result.timedOut;
 }
 export function runProcess(
   executable: string,
@@ -33,27 +60,39 @@ export function runProcess(
       timedOut = false,
       truncated = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopTimer: ReturnType<typeof setTimeout> | undefined;
+    let stopReason: string | undefined;
     const max = options.maxBytes ?? 128 * 1024;
     const finish = (exitCode: number | null, error?: string): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(stopTimer);
       options.signal?.removeEventListener("abort", abort);
       resolve({ exitCode, stdout, stderr, timedOut, truncated, error });
     };
-    const stop = (): void => {
+    const stop = (reason: string): void => {
+      if (settled || stopReason) return;
+      stopReason = reason;
+      clearTimeout(timer);
       try {
-        child?.kill("SIGKILL");
-        child?.stdout.destroy();
-        child?.stderr.destroy();
-        child?.unref();
+        if (!child?.pid) { finish(null, reason); return; }
+        if (os.platform() === "win32") {
+          const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", shell: false });
+          killer.on("error", () => child?.kill("SIGKILL"));
+          killer.on("close", code => { if (code !== 0) child?.kill("SIGKILL"); });
+        } else {
+          // A configure/build may have spawned Ninja and compiler children.
+          process.kill(-child.pid, "SIGKILL");
+        }
       } catch {
-        /* already closed */
+        try { child?.kill("SIGKILL"); } catch { /* already closed */ }
       }
+      // Prefer the close event so the direct child is reaped before another command.
+      stopTimer = setTimeout(() => finish(null, reason), 2000);
     };
     const abort = (): void => {
-      stop();
-      finish(null, "Cancelled");
+      stop("Cancelled");
     };
     if (options.signal?.aborted) {
       finish(null, "Cancelled");
@@ -73,12 +112,12 @@ export function runProcess(
         env: options.env,
         windowsHide: true,
         shell: false,
+        detached: os.platform() !== "win32",
       });
       child.stdin.end();
       timer = setTimeout(() => {
         timedOut = true;
-        stop();
-        finish(null, "Process timeout");
+        stop("Process timeout");
       }, options.timeoutMs ?? 4000);
       options.signal?.addEventListener("abort", abort, { once: true });
       child.stdout.on("data", (buffer: Buffer) => {
@@ -88,8 +127,7 @@ export function runProcess(
         try {
           options.onStdout?.(chunk);
         } catch {
-          stop();
-          finish(null, "Output callback failed");
+          stop("Output callback failed");
         }
       });
       child.stderr.on("data", (buffer: Buffer) => {
@@ -99,12 +137,11 @@ export function runProcess(
         try {
           options.onStderr?.(chunk);
         } catch {
-          stop();
-          finish(null, "Output callback failed");
+          stop("Output callback failed");
         }
       });
-      child.on("error", (error) => finish(null, error.message));
-      child.on("close", (code) => finish(code));
+      child.on("error", (error) => finish(null, stopReason || error.message));
+      child.on("close", (code) => finish(stopReason ? null : code, stopReason));
     } catch (error) {
       finish(
         null,
