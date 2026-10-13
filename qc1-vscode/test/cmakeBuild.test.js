@@ -23,7 +23,7 @@ test("real native CMake configures and builds a renamed artifact in a Unicode pa
   assert.equal(compilation.exitCode, 0, compilation.stderr || compilation.error);
   const snapshot = readFileApi(build, root);
   const target = snapshot.targets.find(target => target.name === "application" && (!target.configuration || target.configuration === "Debug"));
-  assert.ok(target, `CMake File API did not return the Debug application target: ${JSON.stringify(snapshot)}`);
+  assert.ok(target, `CMake File API did not return the Debug application target for ${root}: ${JSON.stringify(snapshot)}`);
   assert.ok(target.artifacts.some(file => path.basename(file).startsWith("renamed") && fs.existsSync(file)));
   assert.ok(target.sources.includes(path.join(root, "main.c")));
 });

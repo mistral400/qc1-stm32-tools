@@ -15,9 +15,13 @@ function str(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 function samePath(left: string, right: string): boolean {
-  const a = path.resolve(left);
-  const b = path.resolve(right);
-  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+  const normalize = (value: string): string => {
+    let resolved = path.resolve(value);
+    if (process.platform !== "win32") return resolved;
+    try { resolved = fs.realpathSync.native(resolved); } catch { /* keep normalized input */ }
+    return resolved.normalize("NFC").toLowerCase();
+  };
+  return normalize(left) === normalize(right);
 }
 export interface ConfiguredTarget {
   name: string;
