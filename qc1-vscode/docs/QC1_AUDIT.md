@@ -119,6 +119,7 @@ Les résultats matériels ci-dessus suivent la dernière portée donnée par l'u
 | GPIO_Demo local | PASS — détection et build réel CM7/CM4 avec STM32CubeH7 `v1.13.0` et Make |
 | `git diff --check` | PASS après les changements de code et de documentation |
 | VSIX, installation et activation VS Code | PASS — candidate 0.4.0 installée; l'Extension Host confirme l'activation sur GPIO_Demo |
+| CI GitHub | PASS — 6/6 runners Linux x64/ARM64, Windows x64/ARM64, macOS Intel/Apple Silicon |
 
 ### Limites de preuve
 
@@ -126,6 +127,6 @@ Les résultats matériels ci-dessus suivent la dernière portée donnée par l'u
 
 ## Marketplace et risques résiduels
 
-Le manifeste local a bugs, licence, catégories, mots-clés, icône, README/CHANGELOG, cibles d'activation et une whitelist de paquet qui inclut les guides. Le VSIX 0.4.0 a été empaqueté, installé et activé dans VS Code. Aucun push, release GitHub ou publication Marketplace n'a encore été effectué.
+Le manifeste local a bugs, licence, catégories, mots-clés, icône, README/CHANGELOG, cibles d'activation et une whitelist de paquet qui inclut les guides. Le VSIX 0.4.0 a été empaqueté, installé et activé dans VS Code. La branche est poussée et la PR #2 est ouverte; ses six jobs CI passent. Le merge, le tag et la release GitHub, puis la publication Marketplace restent à effectuer.
 
-Le journal Extension Host confirme l'activation, mais le rendu du dashboard n'a pas été inspecté visuellement. Le matériel H755, les séquences dual-core/boot/HSEM et le routage multi-probe physique restent NOT TESTED. La suite porte sur la revue finale du diff, les contrôles distants, la PR, la release GitHub et la publication Marketplace.
+Le journal Extension Host confirme l'activation, mais le rendu du dashboard n'a pas été inspecté visuellement. Le matériel H755, les séquences dual-core/boot/HSEM et le routage multi-probe physique restent NOT TESTED. La publication Marketplace requiert un accès publisher; `VSCE_PAT` n'est pas configuré dans l'environnement de cette session.

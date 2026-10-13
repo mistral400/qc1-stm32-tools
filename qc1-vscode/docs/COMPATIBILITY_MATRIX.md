@@ -69,6 +69,7 @@ Les preuves automatisées sont reproductibles avec les commandes de [TESTING.md]
 | HAL/CMSIS/BSP du GPIO_Demo | PASS — dépendances trouvées dans l'installation locale ciblée | DEPENDENCIES — `STM32CubeH7-v1.13.0/Drivers`; licence conservée; seules les dépendances référencées ont été récupérées |
 | Flash/reset et test LED H755 | NOT TESTED | HARDWARE — aucun ST-Link n'a été détecté et aucun flash n'a été lancé |
 | Gates de code au 12 octobre | PASS — 138 pass, 0 fail, 1 skip | LOCAL — skip `ExternalProject` faute de Ninja; typecheck/lint PASS; npm audit zéro vulnérabilité |
+| CI portabilité multi-plateforme | PASS — 6/6 runners | GitHub Actions, commit `21a313b`, 13 octobre 2026; tests, audit et packaging VSIX réussis |
 
 Le vrai build QC1 a produit CM7 et CM4 indépendamment : ELF, BIN, HEX et MAP; le rapport `build/qc1/build-report.json` indique `built`. Les vecteurs sont à `0x08000000` et `0x08100000`, conformément aux linkers GPIO_Demo. Le générateur utilisé est `Unix Makefiles`, choisi par le repli Make de l'importeur CubeIDE en l'absence de Ninja. Aucun flash ni test LED n'a eu lieu, car aucune sonde ST-Link n'a été détectée.
 

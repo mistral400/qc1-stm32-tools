@@ -18,7 +18,7 @@ Cette page décrit la candidate `0.4.0` au 12 octobre 2026. L'installation local
 | `.vscodeignore` | Absent; l'attribut `files` de `package.json` sert de liste d'inclusion. Examiner le tree VSIX final. |
 | `docs/**` | Ajouté au paquet via `files` après génération des guides |
 
-Le nom et l'identifiant de publisher n'ont pas été validés en ligne avec un compte Marketplace. La propriété du publisher, la description d'extension, les liens de support, les captures, la politique de confidentialité et le processus de signature restent à vérifier par le propriétaire avant publication.
+La fiche Marketplace publique confirme l'identifiant `Mistral400.QC1-STM32-Tools` et la version disponible `0.3.1`. L'accès de publication pour cette session n'est pas configuré; la propriété effective et les droits de marque restent à vérifier avec le publisher.
 
 ## Extensions VS Code impliquées
 
@@ -69,10 +69,10 @@ Installer le VSIX dans un `--user-data-dir` et un `--extensions-dir` temporaires
 
 ## Avant une publication future
 
-- Observer le workflow CI sur les runners définis, corriger toute différence de packaging.
+- CI vérifiée sur les six runners pour le commit `21a313b`; relancer après toute modification du code ou du paquet.
 - Tester l'installation/activation dans un profil VS Code propre avec un VSIX final.
 - Faire les validations hardware sur les cartes qui sont réellement connectées.
-- Reconfirmer le compte publisher, droits de marque/icône, changelog, README Marketplace et URL de support.
+- Vérifier l'accès publisher, droits de marque/icône, changelog, README Marketplace et URL de support.
 - Vérifier l'archive, le licence scan, les dépendances et la provenance de tout outil téléchargé.
 - Le build du GPIO_Demo réel est maintenant passé avec la version locale identifiée de STM32CubeH7 `v1.13.0`; le flash H755 et le test LED restent à faire sur une carte connectée.
 - Revalider la liste `vsce ls --tree`, la signature, l'installation locale et l'identité du publisher pour cette candidate.
@@ -81,7 +81,8 @@ Installer le VSIX dans un `--user-data-dir` et un `--extensions-dir` temporaires
 
 - `npm run typecheck`, `npm run lint` et `npm test` passent; 138 tests réussissent et un test `ExternalProject` est ignoré faute de Ninja.
 - `npm audit` signale zéro vulnérabilité après le passage de l'outil de développement `@vscode/vsce` à 4.0.0.
+- La CI multi-plateforme passe sur Ubuntu x64/ARM64, Windows x64/ARM64 et macOS Intel/Apple Silicon.
 - Le test d'import CubeIDE compile un fixture H745 et le GPIO_Demo officiel réel avec des images CM7/CM4 séparées; ce dernier utilise le repli `Unix Makefiles`.
-- Le VSIX 0.4.0 a été installé localement et son activation dans VS Code est confirmée par le journal Extension Host. GitHub PR/release et publication Marketplace restent à confirmer.
+- Le VSIX 0.4.0 a été installé localement et son activation dans VS Code est confirmée par le journal Extension Host. La PR GitHub est ouverte; release et publication Marketplace restent à confirmer.
 
 Référence manifeste : [Extension Manifest VS Code](https://code.visualstudio.com/api/references/extension-manifest) et [Extension Marketplace](https://code.visualstudio.com/docs/configure/extensions/extension-marketplace).

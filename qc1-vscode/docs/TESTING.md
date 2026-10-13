@@ -68,7 +68,7 @@ Les ELF et fichiers BIN/HEX/MAP des deux cœurs sont dans le `build/qc1` du proj
 
 ## CI
 
-`.github/workflows/qc1-portability.yml` définit `npm ci`, lint, typecheck, tests, audit et VSIX package sur Ubuntu x64/ARM64, Windows x64/ARM64 et macOS Intel/Apple Silicon. La définition du workflow n'est pas une exécution réussie. Une CI distante doit être observée avant de marquer ces plateformes PASS.
+Pour le commit `21a313b` du 13 octobre 2026, les six jobs de `.github/workflows/qc1-portability.yml` ont passé `npm ci`, lint, typecheck, tests, audit et le packaging VSIX : Ubuntu 24.04 x64/ARM64, Windows Server 2022 x64, Windows 11 ARM64 et macOS 15 Intel/Apple Silicon. Ces résultats vérifient la suite et le paquet sur ces runners; ils ne valident pas le matériel STM32.
 
 ## Installation et activation VSIX locale
 
