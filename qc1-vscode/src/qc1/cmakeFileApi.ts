@@ -14,6 +14,11 @@ function array(value: unknown): Record<string, unknown>[] {
 function str(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
+function samePath(left: string, right: string): boolean {
+  const a = path.resolve(left);
+  const b = path.resolve(right);
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
 export interface ConfiguredTarget {
   name: string;
   configuration: string;
@@ -90,7 +95,7 @@ export function readFileApi(
         paths = object(model.paths);
       result.source = str(paths.source);
       result.build = str(paths.build) || buildDirectory;
-      if (path.resolve(result.source) !== path.resolve(projectRoot)) {
+      if (!samePath(result.source, projectRoot)) {
         result.status = "stale: source directory differs";
         continue;
       }

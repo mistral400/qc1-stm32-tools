@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const path = require("node:path");
 
 const {
   buildDiscoveryRoots,
@@ -28,16 +29,19 @@ test("maps confidence to a UI category without changing the candidate", () => {
 });
 
 test("builds bounded discovery roots in the requested priority order", () => {
+  const workspace = path.resolve("workspace");
+  const firmware = path.join(workspace, "firmware");
+  const recent = path.resolve("recent", "one");
   assert.deepEqual(buildDiscoveryRoots(
-    ["/workspace"],
-    "/workspace/firmware",
-    ["/recent/one", "/workspace"],
-  ), ["/workspace", "/workspace/firmware", "/recent/one"]);
+    [workspace],
+    firmware,
+    [recent, workspace],
+  ), [workspace, firmware, recent]);
 });
 
 test("keeps a small most-recent-first project history", () => {
   assert.deepEqual(
-    rememberRecentProject(["/old", "/older"], "/new", 2),
-    ["/new", "/old"],
+    rememberRecentProject([path.resolve("old"), path.resolve("older")], path.resolve("new"), 2),
+    [path.resolve("new"), path.resolve("old")],
   );
 });

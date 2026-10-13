@@ -100,13 +100,13 @@ export function inspectProjectDetails(
         .filter((p) => inside(project.root, p));
       if (
         candidates.some((candidate) => {
-          const s = checkSpelling(candidate);
+          const s = checkSpelling(candidate, project.root);
           return s.exists && !s.mismatch;
         })
       )
         continue;
       const mismatch = candidates
-        .map(checkSpelling)
+        .map((candidate) => checkSpelling(candidate, project.root))
         .find((s) => s.mismatch && fs.existsSync(s.actual));
       if (mismatch) {
         const issue = finding(

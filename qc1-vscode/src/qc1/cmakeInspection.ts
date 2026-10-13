@@ -154,7 +154,7 @@ export function inspectCmake(
       result.unresolved.push(`External reference: ${requested}`);
       return;
     }
-    const spelling = checkSpelling(requested);
+    const spelling = checkSpelling(requested, root);
     if (spelling.mismatch) {
       const issue = finding(
         "QC1-PATH-001",

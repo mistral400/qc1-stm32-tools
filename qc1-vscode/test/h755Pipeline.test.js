@@ -52,7 +52,7 @@ test("extension refreshes CubeMX utility targets and core artifacts after config
     const flash = extension.buildProcessInvocations({ ...configured, openocdOk: true, openocdPath: "/tools/openocd" }, `flash-${core}`);
     const command = flash.find(invocation => invocation.phase === "flashing");
     assert.match(command.args.at(-1), new RegExp(`targets stm32h7x.cpu${core === "cm7" ? 0 : 1}`));
-    assert.ok(command.args.at(-1).includes(configured[`${core}ElfPath`]));
+    assert.ok(command.args.at(-1).includes(configured[`${core}ElfPath`].replace(/\\/g, "/")));
     assert.ok(command.args.includes("set DUAL_BANK 1"));
   }
   for (const core of ["cm7", "cm4"]) {
