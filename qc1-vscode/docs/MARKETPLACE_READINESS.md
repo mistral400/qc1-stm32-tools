@@ -1,6 +1,6 @@
 # Préparation au Visual Studio Marketplace
 
-Cette page décrit la candidate `0.4.0` au 12 octobre 2026. L'installation locale et l'activation sont vérifiées; la publication Marketplace et la disponibilité distante doivent être confirmées séparément.
+Cette page décrit la candidate Marketplace `0.4.0` au 12 octobre 2026. La release GitHub est publiée avec le VSIX vérifié; la fiche Marketplace affiche encore `0.3.1` et l'accès publisher est requis pour y publier `0.4.0`.
 
 ## Manifeste
 
@@ -83,6 +83,7 @@ Installer le VSIX dans un `--user-data-dir` et un `--extensions-dir` temporaires
 - `npm audit` signale zéro vulnérabilité après le passage de l'outil de développement `@vscode/vsce` à 4.0.0.
 - La CI multi-plateforme passe sur Ubuntu x64/ARM64, Windows x64/ARM64 et macOS Intel/Apple Silicon.
 - Le test d'import CubeIDE compile un fixture H745 et le GPIO_Demo officiel réel avec des images CM7/CM4 séparées; ce dernier utilise le repli `Unix Makefiles`.
-- Le VSIX 0.4.0 a été installé localement et son activation dans VS Code est confirmée par le journal Extension Host. La PR GitHub est ouverte; release et publication Marketplace restent à confirmer.
+- Le VSIX 0.4.0 a été installé localement et son activation dans VS Code est confirmée par le journal Extension Host. La PR #2 est fusionnée au commit `d45f002`; les six contrôles CI de la PR et les six contrôles post-fusion passent. Le tag `v0.4.0` et la [release GitHub](https://github.com/mistral400/qc1-stm32-tools/releases/tag/v0.4.0) sont publiés avec le VSIX attaché.
+- Le Marketplace affiche encore la version `0.3.1`. `vsce publish` a demandé un Personal Access Token du publisher `Mistral400`; la publication attend la connexion du publisher.
 
 Référence manifeste : [Extension Manifest VS Code](https://code.visualstudio.com/api/references/extension-manifest) et [Extension Marketplace](https://code.visualstudio.com/docs/configure/extensions/extension-marketplace).

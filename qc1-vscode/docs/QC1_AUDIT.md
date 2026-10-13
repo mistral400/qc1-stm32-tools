@@ -123,10 +123,10 @@ Les résultats matériels ci-dessus suivent la dernière portée donnée par l'u
 
 ### Limites de preuve
 
-`st-info --probe` ne trouve aucune sonde sur cette machine; aucun flash ou test LED n'a été lancé. Le vrai build a produit les deux images; `objdump` confirme leurs sections vecteurs aux adresses des linkers. STM32CubeH7 `v1.13.0` et sa licence sont conservés dans `~/Downloads/QC1-Releases/`. L'état distant du Marketplace et la publication GitHub restent à confirmer. Voir [TESTING.md](TESTING.md) et [COMPATIBILITY_MATRIX.md](COMPATIBILITY_MATRIX.md) pour l'état révisé.
+`st-info --probe` ne trouve aucune sonde sur cette machine; aucun flash ou test LED n'a été lancé. Le vrai build a produit les deux images; `objdump` confirme leurs sections vecteurs aux adresses des linkers. STM32CubeH7 `v1.13.0` et sa licence sont conservés dans `~/Downloads/QC1-Releases/`. La release GitHub `v0.4.0` est publiée; la fiche Marketplace reste à `0.3.1` au dernier contrôle. Voir [TESTING.md](TESTING.md) et [COMPATIBILITY_MATRIX.md](COMPATIBILITY_MATRIX.md) pour l'état révisé.
 
 ## Marketplace et risques résiduels
 
-Le manifeste local a bugs, licence, catégories, mots-clés, icône, README/CHANGELOG, cibles d'activation et une whitelist de paquet qui inclut les guides. Le VSIX 0.4.0 a été empaqueté, installé et activé dans VS Code. La branche est poussée et la PR #2 est ouverte; ses six jobs CI passent. Le merge, le tag et la release GitHub, puis la publication Marketplace restent à effectuer.
+Le manifeste local a bugs, licence, catégories, mots-clés, icône, README/CHANGELOG, cibles d'activation et une whitelist de paquet qui inclut les guides. Le VSIX 0.4.0 a été empaqueté, installé et activé dans VS Code. La PR #2 est fusionnée dans `main` au commit `d45f002`; les six jobs CI de la PR et les six jobs post-fusion passent. Le tag `v0.4.0` et la [release GitHub](https://github.com/mistral400/qc1-stm32-tools/releases/tag/v0.4.0) sont publiés avec le VSIX attaché.
 
-Le journal Extension Host confirme l'activation, mais le rendu du dashboard n'a pas été inspecté visuellement. Le matériel H755, les séquences dual-core/boot/HSEM et le routage multi-probe physique restent NOT TESTED. La publication Marketplace requiert un accès publisher; `VSCE_PAT` n'est pas configuré dans l'environnement de cette session.
+Le journal Extension Host confirme l'activation, mais le rendu du dashboard n'a pas été inspecté visuellement. Le matériel H755, les séquences dual-core/boot/HSEM et le routage multi-probe physique restent NOT TESTED. La fiche Marketplace affiche encore `0.3.1`. La tentative de publication de `0.4.0` s'arrête sur l'invite du Personal Access Token du publisher `Mistral400`; aucun jeton n'est configuré pour cette session.
