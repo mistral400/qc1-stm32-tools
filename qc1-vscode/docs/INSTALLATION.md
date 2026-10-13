@@ -2,7 +2,7 @@
 
 ## Installer QC1
 
-La candidate locale `0.4.0` est installée dans VS Code depuis `~/Downloads/QC1-Releases/qc1-stm32-tools-0.4.0.vsix`. Au dernier contrôle, la version Marketplace disponible était encore `0.3.1`; revalide la disponibilité avant d'annoncer `0.4.0` comme publiée.
+La version `0.4.0` est disponible dans la [release GitHub](https://github.com/mistral400/qc1-stm32-tools/releases/tag/v0.4.0) et le VSIX local est installé dans VS Code depuis `~/Downloads/QC1-Releases/qc1-stm32-tools-0.4.0.vsix`. Au dernier contrôle, la fiche Marketplace affichait toujours `0.3.1`; la publication Marketplace de `0.4.0` attend l'accès publisher.
 
 Pour installer un paquet VSIX local :
 
