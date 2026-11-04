@@ -194,15 +194,19 @@ function getWorkspaceRoot() {
     const active = vscode.window.activeTextEditor?.document.uri;
     const activeRoot = active ? vscode.workspace.getWorkspaceFolder(active)?.uri.fsPath : undefined;
     const roots = [...new Set([activeRoot, ...(vscode.workspace.workspaceFolders || []).filter(folder => folder.uri.scheme === "file").map(folder => folder.uri.fsPath)].filter((root) => Boolean(root)))];
-    return roots.find(root => vscode.workspace.getConfiguration("qc1", vscode.Uri.file(root)).get("projectPath", "").trim() || discoverProject(root)) || roots[0];
+    const config = qc1WindowConfiguration();
+    return roots.find(root => config.get("projectPath", "").trim() || discoverProject(root)) || roots[0];
 }
 function getWorkspaceRoots() {
     return [...new Set((vscode.workspace.workspaceFolders || [])
             .filter((folder) => folder.uri.scheme === "file")
             .map((folder) => folder.uri.fsPath))];
 }
+function qc1WindowConfiguration() {
+    return vscode.workspace.getConfiguration("qc1");
+}
 function qc1Configuration(root = getWorkspaceRoot()) {
-    const configured = vscode.workspace.getConfiguration("qc1").get("projectPath", "").trim();
+    const configured = qc1WindowConfiguration().get("projectPath", "").trim();
     const scope = configured ? (0, filesystem_1.resolveUserPath)(configured, root || process.cwd()) : root;
     return vscode.workspace.getConfiguration("qc1", scope ? vscode.Uri.file(scope) : undefined);
 }
@@ -322,11 +326,12 @@ function isAllowedQc1Command(command) {
  */
 function getQc1Status(context) {
     const workspaceRoot = getWorkspaceRoot() || "";
-    const configuredProjectPath = vscode.workspace.getConfiguration("qc1").get("projectPath", "").trim();
+    const windowConfig = qc1WindowConfiguration();
+    const configuredProjectPath = windowConfig.get("projectPath", "").trim();
     const requestedProjectPath = configuredProjectPath
         ? (0, projectDiscovery_1.resolveConfiguredProjectPath)(configuredProjectPath, workspaceRoot || process.cwd()) : "";
     const config = vscode.workspace.getConfiguration("qc1", requestedProjectPath || workspaceRoot ? vscode.Uri.file(requestedProjectPath || workspaceRoot) : undefined);
-    const autoDetectProject = config.get("autoDetectProject", true);
+    const autoDetectProject = windowConfig.get("autoDetectProject", true);
     const configuredCubeH7Path = config.get("cubeH7Path", "").trim();
     const cubeH7Root = configuredCubeH7Path ? (0, filesystem_1.resolveUserPath)(configuredCubeH7Path, requestedProjectPath || workspaceRoot || process.cwd()) : "";
     const configuredCmakePath = getExistingSettingPath(config, "cmakePath");
@@ -1531,7 +1536,7 @@ class QC1PanelProvider {
             update: (key, value, target) => {
                 if (this.buildRunning)
                     throw new Error("Impossible de changer les réglages pendant une opération QC1.");
-                const windowSetting = ["projectPath", "autoDiscoverProjects", "discoveryRoots"].includes(key);
+                const windowSetting = (0, projectConfiguration_1.isQc1WindowScopedSetting)(key);
                 const config = windowSetting ? vscode.workspace.getConfiguration("qc1") : qc1Configuration();
                 const existingFolderOverride = !windowSetting && target === "workspace" && config.inspect(key)?.workspaceFolderValue !== undefined;
                 return config.update(key, value, existingFolderOverride ? vscode.ConfigurationTarget.WorkspaceFolder : target === "workspace" ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
@@ -1624,7 +1629,7 @@ class QC1PanelProvider {
             return;
         if (requestId !== this.discovery.requestId)
             return;
-        if (allowAutomaticScan && qc1Configuration().get("autoDiscoverProjects", false))
+        if (allowAutomaticScan && qc1WindowConfiguration().get("autoDiscoverProjects", false))
             await this.discovery.scan(this.discoveryRoots());
         else
             await this.discovery.refreshActive();
@@ -2008,15 +2013,16 @@ class QC1PanelProvider {
     /** Regroupe les réglages exposés à l'onglet Paramètres de la Webview. */
     getConfig() {
         const config = qc1Configuration();
+        const windowConfig = qc1WindowConfiguration();
         const status = getQc1Status(this.context);
         return {
             os: (0, dashboardState_1.getOsLabel)(process.platform),
             osRaw: process.platform,
             extensionVersion: this.context.extension.packageJSON.version || dashboardState_1.defaultDashboardState.environment.extensionVersion,
-            projectPath: vscode.workspace.getConfiguration("qc1").get("projectPath", ""),
+            projectPath: windowConfig.get("projectPath", ""),
             configurationScope: (0, projectConfiguration_1.projectWriteTarget)(Boolean(vscode.workspace.workspaceFolders?.length || vscode.workspace.workspaceFile)) === "workspace" ? "Workspace (projet interne ou externe)" : "User (fenêtre sans workspace)",
-            autoDiscoverProjects: config.get("autoDiscoverProjects", false),
-            discoveryRoots: config.get("discoveryRoots", []),
+            autoDiscoverProjects: windowConfig.get("autoDiscoverProjects", false),
+            discoveryRoots: windowConfig.get("discoveryRoots", []),
             cmakePath: config.get("cmakePath", ""),
             buildDirectory: config.get("buildDirectory", "build/qc1"),
             buildType: config.get("buildType", "Debug"),
@@ -2027,11 +2033,11 @@ class QC1PanelProvider {
             baudRate: config.get("baudRate", 19200),
             resetProfile: this.resetProfiles.get(status.projectPath),
             stlinkPath: config.get("stlinkPath", "st-info"),
-            autoDetectProject: config.get("autoDetectProject", true),
-            autoClearOutput: config.get("autoClearOutput", false),
-            showTimestamps: config.get("showTimestamps", true),
-            outputMaxLines: config.get("outputMaxLines", 500),
-            compactMode: config.get("compactMode", false),
+            autoDetectProject: windowConfig.get("autoDetectProject", true),
+            autoClearOutput: windowConfig.get("autoClearOutput", false),
+            showTimestamps: windowConfig.get("showTimestamps", true),
+            outputMaxLines: windowConfig.get("outputMaxLines", 500),
+            compactMode: windowConfig.get("compactMode", false),
             cmakeSource: status.cmakeSource,
             cmakeMode: status.nativeCmakeOk ? "projet natif" : "intégré au VSIX",
             detectedCmakePath: status.cmakePath || "--",
@@ -2104,6 +2110,7 @@ class QC1PanelProvider {
                     progress.report({ message: "Projet, outils et problèmes VS Code" });
                     const status = getQc1Status(this.context);
                     const config = qc1Configuration();
+                    const windowConfig = qc1WindowConfiguration();
                     const workspaceFolders = vscode.workspace.workspaceFolders || [];
                     const projectRoot = status.projectPath || getWorkspaceRoot() || "";
                     const collectionErrors = [];
@@ -2203,7 +2210,7 @@ class QC1PanelProvider {
                             diagnostics: projectDiagnostics
                         },
                         configuration: {
-                            projectPath: config.get("projectPath", ""),
+                            projectPath: windowConfig.get("projectPath", ""),
                             buildDirectory: config.get("buildDirectory", "build/qc1"),
                             buildType: config.get("buildType", "Debug"),
                             cmakePreset: config.get("cmakePreset", ""),
@@ -2217,10 +2224,10 @@ class QC1PanelProvider {
                             stlinkPath: config.get("stlinkPath", "st-info"),
                             serialPort: config.get("serialPort", ""),
                             baudRate: config.get("baudRate", 19200),
-                            autoDetectProject: config.get("autoDetectProject", true),
-                            autoClearOutput: config.get("autoClearOutput", false),
-                            showTimestamps: config.get("showTimestamps", true),
-                            outputMaxLines: config.get("outputMaxLines", 500)
+                            autoDetectProject: windowConfig.get("autoDetectProject", true),
+                            autoClearOutput: windowConfig.get("autoClearOutput", false),
+                            showTimestamps: windowConfig.get("showTimestamps", true),
+                            outputMaxLines: windowConfig.get("outputMaxLines", 500)
                         },
                         dashboard: {
                             currentAction: dashboardState.currentAction,
@@ -3409,7 +3416,7 @@ class QC1PanelProvider {
      */
     appendOutput(text, kind = "stdout") {
         // Logging must not trigger a project scan for every compiler output chunk.
-        const config = qc1Configuration();
+        const config = qc1WindowConfiguration();
         const timestamp = config.get("showTimestamps", true)
             ? `[${new Date().toLocaleTimeString()}] `
             : "";
@@ -3714,7 +3721,7 @@ class QC1PanelProvider {
         });
     }
     discoveryRoots() {
-        const config = qc1Configuration();
+        const config = qc1WindowConfiguration();
         return (0, projectUiState_1.buildDiscoveryRoots)(getWorkspaceRoots(), this.discovery.snapshot.selectedPath, this.recent.paths(), config.get("discoveryRoots", []));
     }
     publishProjectDiscovery() {

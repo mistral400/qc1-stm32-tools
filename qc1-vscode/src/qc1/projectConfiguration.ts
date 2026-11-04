@@ -1,7 +1,27 @@
 import { validateResetProfile } from "./resetConfiguration";
 import type { ResetProfile } from "./resetConfiguration";
 
-/** Window-wide projectPath; other QC1 settings retain their existing scopes. */
+/** Settings whose values belong to a VS Code window rather than a firmware project. */
+export const qc1WindowScopedSettings: ReadonlySet<string> = new Set([
+  "projectPath",
+  "autoDiscoverProjects",
+  "discoveryRoots",
+  "autoDetectProject",
+  "autoClearOutput",
+  "showTimestamps",
+  "outputMaxLines",
+  "compactMode",
+  "autoRefreshStatus",
+  "enablePointerVisualizer",
+  "pointerVisualizerMaxDepth",
+  "visualizerTheme",
+]);
+
+export function isQc1WindowScopedSetting(key: string): boolean {
+  return qc1WindowScopedSettings.has(key);
+}
+
+/** The selected project and project discovery settings belong to the current VS Code window. */
 export type ConfigurationWriteTarget = "workspace" | "global";
 export interface ProjectSettingsInput {
   projectPath: string;

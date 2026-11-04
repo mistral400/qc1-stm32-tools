@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1 - 2026-11-04
+
+- Separate VS Code window settings from project resource settings; read and update each setting through its declared scope to remove activation warnings and preserve project-specific overrides.
+- Add regression checks for manifest scope declarations and for window settings accessed with a project URI.
+- VSIX installed and activated in an isolated profile on VS Code 1.145.0 / macOS arm64; its Extension Host log contains no QC1 scope warnings. No visual inspection, physical target examination, flash, reset, cross-platform run, or remote CI was performed.
+- Keep the existing local `v0.5.0` tag unchanged; this patch is packaged and checkpointed separately without pushing or publishing it.
+
 ## 0.5.0 - 2026-11-04
 
 - Add read-only ELF section inspection from `arm-none-eabi-objdump -h`, with Flash load estimates, static RAM estimates, `.text`/`.data`/`.bss` details and linker-declared region utilization.

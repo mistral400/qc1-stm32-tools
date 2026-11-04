@@ -5,6 +5,16 @@ const test = require("node:test");
 
 const root = path.resolve(__dirname, "..");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const { qc1WindowScopedSettings } = require("../out/qc1/projectConfiguration");
+
+test("QC1 settings declare scopes that match the extension accessors", () => {
+  const properties = manifest.contributes.configuration[0].properties;
+  for (const [qualifiedName, definition] of Object.entries(properties)) {
+    const key = qualifiedName.replace(/^qc1\./, "");
+    const expected = qc1WindowScopedSettings.has(key) ? "window" : "resource";
+    assert.equal(definition.scope, expected, `${qualifiedName} must be declared ${expected}-scoped`);
+  }
+});
 
 test("optional integrations are bundled without a blocking extension dependency", () => {
   assert.equal(manifest.extensionDependencies, undefined);

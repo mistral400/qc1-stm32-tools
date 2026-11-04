@@ -131,3 +131,12 @@ Inspection et baseline terminées. Jalons 0.4.1 à 0.4.7 sont validés et checkp
 - Packaging local PASS : `qc1-stm32-tools-0.5.0.vsix` (329 fichiers, 1,44 MB); `unzip -t` PASS; version 0.5.0 du manifeste vérifiée. `vsce` signale que le bundling pourrait améliorer la performance de chargement. L'empreinte SHA-256 est fournie dans le compte rendu final de livraison.
 - Smoke d'activation du VSIX dans un profil temporaire : PASS, VS Code 1.145.0 / macOS arm64, activation `workspaceContains:CMakeLists.txt` observée dans le journal sans erreur QC1. Aucun test visuel n'a été réalisé.
 - Aucune validation matérielle, aucun reset/flash, aucune validation sur Windows/Linux, aucun CI distant ni publication Marketplace. Le smoke d'activation ne prouve pas le rendu visuel ni le comportement sur d'autres plateformes.
+
+### Correctif post-0.5.0 — version locale 0.5.1
+
+- Le contrôle d'activation final a trouvé des réglages `qc1.*` de portée fenêtre lus avec une URI de projet. Les réglages fenêtre sont maintenant lus/écrits via la configuration fenêtre; les chemins CMake/toolchain, artefacts et UART sont explicitement de portée ressource.
+- Ajout d'une liste unique des réglages fenêtre, d'une vérification des portées déclarées dans le manifeste et d'un test d'intégration qui échoue si le code lit un réglage fenêtre avec une URI.
+- `npm test` : 208 réussis, 2 ignorés, 0 échec; `npm run typecheck`, `npm run lint`, `npm audit --omit=dev` (0 vulnérabilité) et `git diff --check` passent. `vsce package` et `unzip -t` passent; le VSIX 0.5.1 compte 329 fichiers.
+- VSIX 0.5.1 installé et activé dans un profil temporaire de VS Code 1.145.0 / macOS arm64 via `workspaceContains:CMakeLists.txt`; aucun avertissement QC1 de portée ni erreur QC1 n'apparaît dans le journal Extension Host. Le profil habituel conserve QC1 0.4.0. Le dashboard n'a pas été inspecté visuellement.
+- Le bus USB a exposé les interfaces STM32 STLink et FTDI UART, mais `st-info --probe` est resté bloqué; la communication SWD et le MCU ne sont pas confirmés. Aucun flash ni reset.
+- Le tag local `v0.5.0` reste inchangé. Le correctif est checkpointé localement en `v0.5.1`; aucun push ni publication Marketplace.

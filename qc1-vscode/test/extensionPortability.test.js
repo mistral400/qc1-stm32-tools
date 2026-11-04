@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const Module = require("node:module");
+const { qc1WindowScopedSettings } = require("../out/qc1/projectConfiguration");
 
 test("extension integration: multi-root, native validation, report and CMake arguments", async (t) => {
   const root = fs.mkdtempSync(
@@ -21,7 +22,8 @@ test("extension integration: multi-root, native validation, report and CMake arg
   const uri = (fsPath) => ({ fsPath, scheme: "file" });
   const errors = [],
     previews = [],
-    scopes = [];
+    scopes = [],
+    invalidWindowScopeAccesses = [];
   const mock = {
     workspace: {
       isTrusted: false,
@@ -35,6 +37,8 @@ test("extension integration: multi-root, native validation, report and CMake arg
       }),
       getConfiguration: (section, scope) => ({
         get: (key, fallback) => {
+          if (section === "qc1" && scope && qc1WindowScopedSettings.has(key))
+            invalidWindowScopeAccesses.push({ operation: "get", key, resource: scope.fsPath });
           if (key === "buildDirectory") {
             scopes.push(scope?.fsPath);
             return scope?.fsPath === firmware ? "custom build" : "wrong-build";
@@ -139,6 +143,7 @@ test("extension integration: multi-root, native validation, report and CMake arg
   assert.ok(scopes.includes(firmware));
   const provider = new QC1PanelProvider(uri(context.extensionPath), context);
   await provider.createDiagnosticReport();
+  assert.deepEqual(invalidWindowScopeAccesses, [], "window-scoped QC1 settings must never be read with a project URI");
   assert.deepEqual(errors, []);
   assert.equal(previews.length, 1);
   assert.ok(previews[0].includes("reportSchemaVersion"));
