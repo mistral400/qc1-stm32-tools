@@ -2,6 +2,12 @@
 
 Les résultats ci-dessous contiennent un état historique de mission du 26 septembre 2026. **PASS** signifie que le niveau indiqué a réellement été exécuté; un test automatisé ne devient pas un test de matériel.
 
+## Vérification d'outillage 0.5.2 — 4 novembre 2026
+
+- macOS Apple Silicon : installation propre `npm ci`, 208 tests passés / 2 ignorés, typecheck, lint, audit complet sans vulnérabilité, packaging et activation VSIX PASS; la CLI confirme aussi l'installation 0.5.2 dans le profil courant.
+- Le correctif vise le lockfile des outils de développement. Les runners Windows/Linux, macOS Intel et la CI distante n'ont pas été exécutés sur cette version.
+- Aucun probe SWD complet ni test matériel n'a été validé lors de cette vérification.
+
 ## Mise à jour locale 0.5.0 — 4 novembre 2026
 
 - macOS Apple Silicon : typecheck, lint, 207 tests logiciels et packaging PASS; smoke d'installation/activation VS Code PASS dans un profil isolé.

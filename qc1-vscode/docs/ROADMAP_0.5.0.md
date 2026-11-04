@@ -140,3 +140,10 @@ Inspection et baseline terminées. Jalons 0.4.1 à 0.4.7 sont validés et checkp
 - VSIX 0.5.1 installé et activé dans un profil temporaire de VS Code 1.145.0 / macOS arm64 via `workspaceContains:CMakeLists.txt`; aucun avertissement QC1 de portée ni erreur QC1 n'apparaît dans le journal Extension Host. Le profil habituel conserve QC1 0.4.0. Le dashboard n'a pas été inspecté visuellement.
 - Le bus USB a exposé les interfaces STM32 STLink et FTDI UART, mais `st-info --probe` est resté bloqué; la communication SWD et le MCU ne sont pas confirmés. Aucun flash ni reset.
 - Le tag local `v0.5.0` reste inchangé. Le correctif est checkpointé localement en `v0.5.1`; aucun push ni publication Marketplace.
+
+### Correctif outillage — version locale 0.5.2
+
+- L'audit complet de 0.5.1 a révélé 14 avis transitifs (2 hauts, 12 modérés), principalement dans l'outillage de développement; `npm audit --omit=dev` ne couvrait pas ce gate de la CI.
+- Le lockfile met à jour les correctifs compatibles de `@azure/identity`, `@azure/msal-node`, `qs`, ESLint, typescript-eslint et `vsce`. L'override `minimatch@11.0.1` évite le DoS signalé sur la version 10.2.6; l'API CommonJS requise par ESLint, typescript-eslint et `vsce` est restée compatible avec les tests et le packaging.
+- `npm ci`, `npm test` (208 réussis, 2 ignorés), typecheck, lint, audit complet et packaging passent sur macOS Apple Silicon. L'installation/activation isolée du VSIX via `workspaceContains:CMakeLists.txt` et l'installation dans le profil VS Code courant sont confirmées. Le chargement du binding SerialPort a été vérifié sans ouvrir de port.
+- Aucun CI distant, Windows/Linux/Intel, rendu visuel, probe SWD réussi, flash/reset ou test matériel n'a été effectué. Aucun push ni publication Marketplace.

@@ -2,7 +2,7 @@
   "name": "qc1-stm32-tools",
   "displayName": "QC1 STM32 Tools",
   "description": "Outils STM32F1 et STM32H7 dual-core pour VS Code",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "publisher": "Mistral400",
   "icon": "media/icon.png",
   "repository": {
@@ -541,5 +541,8 @@
   },
   "dependencies": {
     "serialport": "13.0.0"
+  },
+  "overrides": {
+    "minimatch": "11.0.1"
   }
 }

@@ -1,5 +1,23 @@
 # Tests reproductibles
 
+## Correctif de dépendances 0.5.2 — 4 novembre 2026
+
+| Gate | Résultat |
+| --- | --- |
+| `npm ci` | PASS — 230 paquets installés depuis le lockfile, 0 vulnérabilité |
+| `npm test` | PASS — 208 réussis, 2 ignorés, 210 au total |
+| `npm run typecheck` | PASS |
+| `npm run lint` | PASS |
+| `npm audit` | PASS — 0 vulnérabilité, dépendances de production et de développement |
+| Import SerialPort après installation propre | PASS — binding macOS chargé, aucun port ouvert |
+| `vsce package` puis `zip -T` | PASS — VSIX 0.5.2, 329 fichiers |
+| Installation / activation VS Code | PASS — profil isolé VS Code 1.145.0 arm64; `workspaceContains:CMakeLists.txt` active QC1 sans erreur QC1 dans le journal |
+| Installation du VSIX dans le profil VS Code courant | PASS — `code --list-extensions --show-versions` confirme 0.5.2 |
+| CI distante / Windows / Linux | NON EFFECTUÉES |
+| Flash, reset, UART physique, inspection visuelle | NON EFFECTUÉS |
+
+La correction modifie seulement les dépendances de développement et leur lockfile; l'extension n'a pas changé de comportement. Le remplacement transitif `minimatch@11.0.1` est forcé par `overrides` parce que les plages actuelles des outils acceptent encore les versions vulnérables; son export CommonJS a été exercé par les scripts de lint et de packaging.
+
 ## Exécution locale 0.5.0 — 4 novembre 2026
 
 | Gate | Résultat |

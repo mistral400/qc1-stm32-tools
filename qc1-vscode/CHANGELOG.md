@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.2 - 2026-11-04
+
+- Update vulnerable development-tool dependencies to patched lockfile versions and pin `minimatch` 11.0.1 until upstream ranges include its security fix.
+- A clean `npm ci`, all software tests, typecheck, lint, full `npm audit`, and VSIX packaging pass locally on macOS Apple Silicon. Two environment-dependent tests remain skipped.
+- VSIX 0.5.2 installs in the normal VS Code profile; an isolated VS Code 1.145.0 / macOS arm64 host activated QC1 from `workspaceContains:CMakeLists.txt` without QC1 errors.
+- No extension source behavior changes; no remote CI, visual/platform validation, or hardware action was performed.
+
 ## 0.5.1 - 2026-11-04
 
 - Separate VS Code window settings from project resource settings; read and update each setting through its declared scope to remove activation warnings and preserve project-specific overrides.
