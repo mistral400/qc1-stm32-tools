@@ -168,6 +168,13 @@ export interface QC1EnvironmentStatus {
   cmakeDetected: boolean;
 }
 
+export interface QC1HardwareSession {
+  owner: string;
+  kind: "programming" | "debug" | "openocd-server";
+  probe: string;
+  project: string;
+}
+
 // Objet central transmis au générateur HTML à chaque rafraîchissement complet.
 export interface DashboardState {
   currentAction: string;
@@ -187,6 +194,7 @@ export interface DashboardState {
   project: QC1ProjectStatus;
 
   environment: QC1EnvironmentStatus;
+  hardwareSessions: QC1HardwareSession[];
 
   projectDiscovery: ProjectUiState;
   recentProjects: RecentProject[];
@@ -215,6 +223,7 @@ export const defaultDashboardState: DashboardState = {
   tools: [],
   diagnostics: [],
   artifacts: [],
+  hardwareSessions: [],
   currentAction: "Idle",
   projectName: "--",
   lastCommand: "--",

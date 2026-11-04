@@ -47,6 +47,7 @@ const vscode = require("vscode");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const crypto_1 = require("crypto");
 const processTools_1 = require("./qc1/processTools");
 const filesystem_1 = require("./qc1/filesystem");
 const projectDiagnostics_1 = require("./qc1/projectDiagnostics");
@@ -75,6 +76,7 @@ const webviewMessages_1 = require("./dashboard/webviewMessages");
 const operationHistory_1 = require("./qc1/operationHistory");
 const operationCoordinator_1 = require("./qc1/operationCoordinator");
 const artifactValidation_1 = require("./qc1/artifactValidation");
+const hardwareResources_1 = require("./qc1/hardwareResources");
 // État partagé entre le contrôleur et la Webview QC1.
 let dashboardState = dashboardState_1.defaultDashboardState;
 let dashboardPanel;
@@ -85,6 +87,40 @@ let stlinkCheckedAt;
 let embeddedCmakePath = "";
 let embeddedGccPath = "";
 let embeddedNinjaPath = "";
+const hardwareResources = new hardwareResources_1.HardwareResourceCoordinator();
+const debugResourceIds = new Map();
+const openOcdTerminalResourceIds = new Map();
+function observeCortexDebugSession(session) {
+    if (session.type !== "cortex-debug" && session.configuration.servertype !== "openocd")
+        return;
+    const id = `debug:${session.id}`;
+    const serial = typeof session.configuration.serialNumber === "string" ? session.configuration.serialNumber : undefined;
+    hardwareResources.observe({
+        id,
+        kind: "debug",
+        owner: `Session Debug «${session.name}»`,
+        projectPath: session.workspaceFolder?.uri.fsPath || "",
+        serialNumber: serial,
+    });
+    debugResourceIds.set(session.id, id);
+}
+function releaseCortexDebugSession(session) {
+    const id = debugResourceIds.get(session.id);
+    if (id)
+        hardwareResources.release(id);
+    debugResourceIds.delete(session.id);
+}
+function acquireHardwareResource(input) {
+    const result = hardwareResources.acquire(input);
+    if (!result.acquired || !result.leaseId)
+        throw new Error((0, hardwareResources_1.formatHardwareResourceConflicts)(result.conflicts));
+    return result.leaseId;
+}
+async function assertOpenOcdPortsAvailable() {
+    const ports = await (0, hardwareResources_1.probeOpenOcdEndpoints)();
+    if (ports.length)
+        throw new Error(`Un service écoute déjà sur le(s) port(s) OpenOCD ${ports.join(", ")} (occupation externe suspectée; processus et sonde non identifiés). Arrête ou identifie ce service avant de réessayer.`);
+}
 const projectCache = new Map();
 function discoverProject(root) {
     const cached = projectCache.get(root);
@@ -1037,6 +1073,7 @@ function startOpenOcdTerminal(context) {
         env: getExecutionEnv(status)
     });
     terminal.show();
+    return terminal;
 }
 function cmakeDefinition(name, value) {
     return `-D${name}=${value}`;
@@ -1392,6 +1429,12 @@ function syncDashboardState(context) {
             stlinkCheckedAt,
             cmakeDetected: status.cmakeOk
         },
+        hardwareSessions: hardwareResources.list().map((lease) => ({
+            owner: lease.owner,
+            kind: lease.kind,
+            probe: (0, probeSelection_1.stlinkSerialLabel)(lease.serialNumber || ""),
+            project: lease.projectPath ? path.basename(lease.projectPath) : "Projet inconnu",
+        })),
         diagnostic: {
             ...dashboardState.diagnostic,
             code: diagnostic.code,
@@ -2235,7 +2278,7 @@ class QC1PanelProvider {
         const stableConfigurationFingerprint = operationConfigurationFingerprint(this.context, false);
         this.probeRunning = true;
         void this.ensureStlinkSelection(false, initialStatus)
-            .then((serialNumber) => {
+            .then(async (serialNumber) => {
             if (!serialNumber)
                 return;
             (0, projectConfiguration_1.assertOperationConfiguration)(stableConfigurationFingerprint, operationConfigurationFingerprint(this.context, false));
@@ -2243,7 +2286,29 @@ class QC1PanelProvider {
             if (!(0, probeSelection_1.probeSelectionMatchesProject)(initialStatus.projectPath, currentStatus.projectPath, serialNumber, currentStatus.stlinkSerialNumber)) {
                 throw new Error("Le projet ou la sonde a changé pendant la sélection; OpenOCD n'a pas été démarré.");
             }
-            startOpenOcdTerminal(this.context);
+            const leaseId = acquireHardwareResource({
+                id: `openocd:${(0, crypto_1.randomUUID)()}`,
+                kind: "openocd-server",
+                owner: "Serveur OpenOCD QC1",
+                projectPath: currentStatus.projectPath,
+                serialNumber,
+            });
+            try {
+                await assertOpenOcdPortsAvailable();
+                const terminal = startOpenOcdTerminal(this.context);
+                if (terminal) {
+                    openOcdTerminalResourceIds.set(terminal, leaseId);
+                    syncDashboardState(this.context);
+                    refreshDashboard();
+                    this.postStatus("Serveur OpenOCD QC1 démarré", "success");
+                }
+                else
+                    hardwareResources.release(leaseId);
+            }
+            catch (error) {
+                hardwareResources.release(leaseId);
+                throw error;
+            }
         })
             .catch((error) => {
             const message = error instanceof Error ? error.message : String(error);
@@ -2455,6 +2520,7 @@ class QC1PanelProvider {
         const executedCommands = [];
         let invocations;
         let flashStagingDirectory = "";
+        let hardwareLeaseId;
         let failedResult;
         let failedInvocation;
         let activeInvocation;
@@ -2525,6 +2591,23 @@ class QC1PanelProvider {
                     toolStatus = getQc1Status(this.context);
                     if (toolStatus.stlinkSerialNumber !== selectedSerial)
                         throw new Error("La sélection ST-Link a changé pendant la préparation; aucun flash lancé.");
+                    hardwareLeaseId = acquireHardwareResource({
+                        id: `programming:${(0, crypto_1.randomUUID)()}`,
+                        kind: "programming",
+                        owner: `Flash QC1 ${command}`,
+                        projectPath: toolStatus.projectPath,
+                        serialNumber: selectedSerial,
+                    });
+                    syncDashboardState(this.context);
+                    this.sendDashboardState();
+                    try {
+                        await assertOpenOcdPortsAvailable();
+                    }
+                    catch (error) {
+                        hardwareResources.release(hardwareLeaseId);
+                        hardwareLeaseId = undefined;
+                        throw error;
+                    }
                     configurationFingerprint = operationConfigurationFingerprint(this.context);
                     probePrepared = true;
                 }
@@ -2763,7 +2846,23 @@ class QC1PanelProvider {
                 debugSessionStartedAt = Date.now();
                 recordOperation("debugSession", { status: "running", command, message: `Démarrage de la session ${label}`, startedAt: debugSessionStartedAt });
                 this.rememberProjectOperationSnapshot(projectDir, operationSnapshot, true);
-                const started = await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(vscode.Uri.file(projectDir)), debugConfiguration);
+                const debugLaunchLease = acquireHardwareResource({
+                    id: `debug-launch:${(0, crypto_1.randomUUID)()}`,
+                    kind: "debug",
+                    owner: `Lancement Cortex-Debug ${label}`,
+                    projectPath: projectDir,
+                    serialNumber: refreshed.stlinkSerialNumber || undefined,
+                });
+                let started;
+                try {
+                    await assertOpenOcdPortsAvailable();
+                    started = await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(vscode.Uri.file(projectDir)), debugConfiguration);
+                }
+                finally {
+                    hardwareResources.release(debugLaunchLease);
+                    syncDashboardState(this.context);
+                    this.sendDashboardState();
+                }
                 if (!started)
                     throw new Error(`Cortex-Debug n'a pas démarré la session ${label}.`);
                 debugSessionSucceeded = true;
@@ -2791,6 +2890,8 @@ class QC1PanelProvider {
                     this.appendOutput(`[QC1] Nettoyage du dossier temporaire de flash impossible: ${String(error)}`, "error");
                 }
             }
+            if (hardwareLeaseId)
+                hardwareResources.release(hardwareLeaseId);
         }
         const stdoutText = stdoutParts.join("");
         const stderrText = stderrParts.join("");
@@ -3275,6 +3376,28 @@ async function activate(context) {
     const provider = new QC1PanelProvider(context.extensionUri, context);
     context.subscriptions.push(provider);
     provider.initializeManager();
+    context.subscriptions.push(vscode.debug.onDidStartDebugSession((session) => {
+        observeCortexDebugSession(session);
+        syncDashboardState(context);
+        refreshDashboard();
+    }), vscode.debug.onDidTerminateDebugSession((session) => {
+        releaseCortexDebugSession(session);
+        syncDashboardState(context);
+        refreshDashboard();
+    }), vscode.window.onDidCloseTerminal((terminal) => {
+        const leaseId = openOcdTerminalResourceIds.get(terminal);
+        if (!leaseId)
+            return;
+        hardwareResources.release(leaseId);
+        openOcdTerminalResourceIds.delete(terminal);
+        syncDashboardState(context);
+        refreshDashboard();
+    }));
+    const activeDebugSession = vscode.debug.activeDebugSession;
+    if (activeDebugSession)
+        observeCortexDebugSession(activeDebugSession);
+    syncDashboardState(context);
+    refreshDashboard();
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(QC1PanelProvider.viewType, provider));
     // Les identifiants doivent rester identiques à `contributes.commands` dans package.json.
     context.subscriptions.push(vscode.commands.registerCommand("qc1.build", () => {

@@ -51,6 +51,7 @@ exports.defaultDashboardState = {
     tools: [],
     diagnostics: [],
     artifacts: [],
+    hardwareSessions: [],
     currentAction: "Idle",
     projectName: "--",
     lastCommand: "--",

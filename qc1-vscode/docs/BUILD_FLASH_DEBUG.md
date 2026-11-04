@@ -21,6 +21,8 @@ Avant de lancer un outil de programmation :
 
 Le numéro de série est transmis à OpenOCD par `adapter serial` et à `st-flash` par `--serial`. Les lignes QC1 masquent les numéros complets, mais la Quick Pick les montre pour permettre à l'utilisateur de distinguer deux adaptateurs. Le stockage `workspaceState` garde le numéro par clé de projet hachée.
 
+QC1 suit les sessions Cortex-Debug connues (avec la sonde déclarée par la session), le serveur OpenOCD démarré depuis QC1 et les opérations de programmation en cours. La page Outils affiche ces sessions; une nouvelle opération sur la même ST-Link est bloquée avec une instruction de fermeture. QC1 ne termine jamais une session active à la place de l'utilisateur. Avant une opération OpenOCD, QC1 vérifie aussi les ports locaux standards 3333/4444 : un port ouvert sans session suivie est seulement signalé comme occupation externe suspectée, car QC1 ne peut pas identifier son processus ni la sonde associée. Les ports OpenOCD personnalisés et les sessions démarrées avant l'activation que VS Code ne signale pas restent des limites de détection.
+
 | Cible/backend | Artefact et comportement |
 | --- | --- |
 | STM32F1 + OpenOCD | ELF de la cible CMake active, validé puis passé à `program`, `verify`, `reset`, `exit` avec le target STM32F1 |

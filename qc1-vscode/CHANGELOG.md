@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.3 - 2026-11-04
+
+- Track Cortex-Debug sessions, QC1 OpenOCD terminals, and in-flight programming by ST-Link; block conflicting operations without stopping active sessions.
+- Distinguish known session ownership from suspected external OpenOCD occupancy on local ports 3333/4444.
+- Show known hardware sessions in the Tools page with masked ST-Link identifiers.
+- Add mocked tests for probe ownership, unknown probe identity, session release, and local port detection.
+- Reset strategy configuration remains the next milestone because NRST support and reset mechanisms depend on backend and board.
+
 ## 0.4.2 - 2026-11-04
 
 - Validate the selected ELF against one executable CMake target, active project/build scope and target core, and record its size and SHA-256 evidence.

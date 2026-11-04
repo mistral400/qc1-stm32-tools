@@ -28,10 +28,11 @@ Les deux tests ignorés nécessitent `QC1_CUBE_H7_PATH` (installation locale STM
 | --- | --- | --- |
 | 0.4.1 | Résultats séparés par opération/projet; coordination Build/Flash/Debug | Un échec matériel ne modifie pas le résultat Build; build échoué bloque Flash/Debug; états liés au bon projet; tests de succès/échec/changement de projet; compile, typecheck, lint, tests, packaging et activation VS Code |
 | 0.4.2 | Provenance et validation des artefacts; programmation et vérification obligatoires; état reset distinct | Aucun artefact absent/ancien/ambigu utilisé; vérifier OpenOCD/st-flash selon capacités démontrées; tests de processus simulés; pas de revendication de démarrage |
-| 0.4.3 | Ressources ST-Link/OpenOCD, conflits, reset configurable | Sessions QC1 suivies sans tuer celles de l'utilisateur; conflits bloqués avec résolution; paramètres compatibles; tests simulés |
-| 0.4.4 | Modernisation du Webview existant | Navigation compacte, hiérarchie d'actions, états lisibles, accessibilité sémantique, thèmes; tests UI automatisés et vérifications visuelles déclarées séparément |
-| 0.4.5 | Navigation hybride VS Code / TreeViews / dashboard éditeur | Synchronisation sans état métier dupliqué, commandes existantes préservées, activation et packaging |
-| 0.4.6 | UART TX/RX, données graphiques bornées, historique et diagnostics guidés | Tests avec ports/processus simulés, mémoire bornée, documentation multiplateforme; aucun test matériel implicite |
+| 0.4.3 | Suivi des sessions matérielles et résolution des conflits | Sessions Debug/OpenOCD connues suivies sans les arrêter; ports OpenOCD externes signalés comme suspectés; conflits de sonde bloqués; tests simulés |
+| 0.4.4 | Reset configurable par backend et projet | Modes disponibles seulement quand documentés/supportés; incompatibilités refusées; NRST non présumé; tests d'arguments sans carte |
+| 0.4.5 | Modernisation du Webview existant | Navigation compacte, hiérarchie d'actions, états lisibles, accessibilité sémantique, thèmes; tests UI automatisés et vérifications visuelles déclarées séparément |
+| 0.4.6 | Navigation hybride VS Code / TreeViews / dashboard éditeur | Synchronisation sans état métier dupliqué, commandes existantes préservées, activation et packaging |
+| 0.4.7 | UART TX/RX, données graphiques bornées, historique et diagnostics guidés | Tests avec ports/processus simulés, mémoire bornée, documentation multiplateforme; aucun test matériel implicite |
 | 0.5.0 | Inspection statique ELF/MAP Flash/RAM et stabilisation intégrée | Ne pas confondre RAM statique et runtime; STM32F1/H7 couverts; CI, tests, packaging, documentation et limites matérielles vérifiés |
 
 ## Garde-fous
@@ -42,7 +43,7 @@ Les deux tests ignorés nécessitent `QC1_CUBE_H7_PATH` (installation locale STM
 
 ## État de travail
 
-Inspection et baseline terminées. Jalon 0.4.1 validé et checkpointé localement. Jalon actif : **0.4.2 — provenance des artefacts, vérification indépendante et reset séparé**.
+Inspection et baseline terminées. Jalons 0.4.1 et 0.4.2 validés et checkpointés localement. Jalon actif : **0.4.3 — suivi des sessions matérielles et conflits**.
 
 ### Tranche de code en cours — 0.4.1
 
@@ -65,3 +66,14 @@ Inspection et baseline terminées. Jalon 0.4.1 validé et checkpointé localemen
 - VS Code 1.144.1 / macOS arm64, fenêtre sans workspace : activation et commandes publiques PASS (1 test), aucune commande matérielle appelée.
 - Packaging 0.4.2 PASS : `qc1-stm32-tools-0.4.2.vsix` (103 fichiers); intégrité ZIP et version du manifeste vérifiées après ajout du snapshot ELF.
 - Aucun test matériel ni CI distante. Le jalon est validé par les contrôles logiciels; checkpoint local avant la tranche 0.4.3 — ressources et conflits.
+
+### Jalon validé et checkpointé localement — 0.4.3
+
+- `src/qc1/hardwareResources.ts` suit les sessions connues et les réservations de ressources par numéro de ST-Link. Les sessions à sonde inconnue bloquent prudemment tout nouvel usage; une autre sonde explicitement connue reste indépendante.
+- Les événements VS Code suivent les sessions Cortex-Debug; QC1 suit son terminal OpenOCD, les opérations Flash réservent la sonde jusqu'à leur terminaison, et la page Outils liste les sessions actives avec un numéro masqué.
+- Les ports locaux OpenOCD 3333/4444 sont sondés brièvement. Un port ouvert sans propriétaire QC1 est classé suspecté, sans inventer de processus ni de numéro de sonde; les ports personnalisés restent hors détection.
+- La configuration du reset est décalée au jalon 0.4.4 afin de la concevoir selon les capacités spécifiques d'OpenOCD/st-flash et les contraintes NRST, plutôt que de l'agréger au suivi des ressources.
+- Validation logicielle : `npm test` PASS (162, 2 ignorés, 164 total), `npm run typecheck` PASS, `npm run lint` PASS, `git diff --check` PASS.
+- VS Code 1.144.1 / macOS arm64, fenêtre sans workspace : activation et commandes publiques PASS (1 test); aucun test matériel n'est lancé.
+- Packaging local PASS : `qc1-stm32-tools-0.4.3.vsix` (105 fichiers), ZIP valide et version 0.4.3 du manifeste confirmée.
+- Validation locale uniquement; aucune publication ni CI distante. Le jalon 0.4.4 — configuration du reset — reste à faire.

@@ -54,6 +54,16 @@ test("Build page reports build, programming, verification and execution as separ
   assert.doesNotMatch(html, /Aucun succès confirmé/);
 });
 
+test("Tools page lists known hardware sessions without exposing a full serial number", () => {
+  const state = structuredClone(defaultDashboardState);
+  state.hardwareSessions = [{ owner: "Session Debug «F103»", kind: "debug", probe: "ST-LINK …EEFF", project: "firmware" }];
+  const html = renderToolsView(state);
+  assert.match(html, /Sessions matérielles connues/);
+  assert.match(html, /Session Debug «F103»/);
+  assert.match(html, /ST-LINK …EEFF/);
+  assert.doesNotMatch(html, /AABBCCDDEEFF/);
+});
+
 test("project view shows documented H745 project compatibility without changing its MCU identity", () => {
   const state = stateFor("STM32H7", ["cm7", "cm4"]);
   state.projectDiscovery.activeCandidate.mcu = "STM32H745ZITx";
