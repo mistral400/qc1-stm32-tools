@@ -26,11 +26,15 @@ document.addEventListener('click',event=>{
 });
 document.getElementById('projectSettingsForm').addEventListener('submit',event=>{
   event.preventDefault(); const value=id=>document.getElementById(id).value;
+  const resetProfile={mode:value('resetModeInput')};
+  for(const [id,key] of [['adapterSpeedKHzInput','adapterSpeedKHz'],['srstPulseWidthMsInput','srstPulseWidthMs'],['srstDelayMsInput','srstDelayMs']]) {
+    const raw=value(id); if(raw!=='') resetProfile[key]=Number(raw);
+  }
   settingsDirty=false;
   vscode.postMessage({type:'updateProjectSettings',projectPath:value('projectPathInput'),buildType:value('buildTypeInput'),cmakePreset:value('cmakePresetInput'),
     buildDirectory:value('buildDirectoryInput'),serialPort:value('serialPortInput'),baudRate:Number(value('baudRateInput')),
     autoDiscoverProjects:document.getElementById('autoDiscoverProjectsInput').checked,
-    discoveryRoots:value('discoveryRootsInput').split(/\\r?\\n/).map(root=>root.trim()).filter(Boolean)});
+    discoveryRoots:value('discoveryRootsInput').split(/\\r?\\n/).map(root=>root.trim()).filter(Boolean),resetProfile});
 });
 function renderViews(views) {
   if(!views || typeof views!=='object') return;
@@ -52,6 +56,10 @@ function settings(config) {
   if(settingsDirty) return;
   for(const key of ['projectPath','buildType','cmakePreset','buildDirectory','serialPort','baudRate']) {
     const node=document.getElementById(key+'Input'); if(node && document.activeElement!==node) node.value=String(config[key]??'');
+  }
+  const reset=config.resetProfile||{};document.getElementById('resetModeInput').value=reset.mode||'backend-default';
+  for(const [key,id] of [['adapterSpeedKHz','adapterSpeedKHzInput'],['srstPulseWidthMs','srstPulseWidthMsInput'],['srstDelayMs','srstDelayMsInput']]) {
+    const node=document.getElementById(id);if(node && document.activeElement!==node)node.value=reset[key]??'';
   }
   document.getElementById('autoDiscoverProjectsInput').checked=Boolean(config.autoDiscoverProjects);
   document.getElementById('discoveryRootsInput').value=(config.discoveryRoots||[]).join('\\n');

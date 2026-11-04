@@ -154,6 +154,8 @@ test("invalid settings and changed operation configuration are rejected determin
   assert.throws(() => controller.update({ projectPath: "x", buildType: "bad" }));
   assert.throws(() => controller.update({ projectPath: "x", baudRate: -1 }));
   assert.throws(() => controller.update({ projectPath: "x", discoveryRoots: Array(17).fill("x") }));
+  assert.throws(() => controller.update({ projectPath: "x", resetProfile: { mode: "invented" } }));
+  assert.doesNotThrow(() => controller.update({ projectPath: "x", resetProfile: { mode: "hardware-nrst", srstDelayMs: 200 } }));
   assert.doesNotThrow(() => assertOperationConfiguration("same", "same"));
   assert.throws(() => assertOperationConfiguration("old", "new"), /annulées/);
 });

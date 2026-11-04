@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.4 - 2026-11-04
+
+- Add per-project OpenOCD reset profiles: backend default, SYSRESETREQ, hardware NRST, and connect-under-reset.
+- Expose optional SWD adapter speed, NRST pulse width, and delay with strict bounds and numeric-only command generation.
+- Keep `st-flash` on its documented backend reset; refuse OpenOCD-only profiles before planning a flash.
+- Apply reset configuration to OpenOCD programming and Cortex-Debug launches; preserve default arguments unless a profile is selected.
+- Add tests for profile validation, project-key isolation, backend capability rejection, STM32F1/H7 command order, and Webview input validation.
+- No hardware validation; NRST wiring and adapter capability remain board-specific.
+
 ## 0.4.3 - 2026-11-04
 
 - Track Cortex-Debug sessions, QC1 OpenOCD terminals, and in-flight programming by ST-Link; block conflicting operations without stopping active sessions.

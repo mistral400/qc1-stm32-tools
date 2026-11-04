@@ -112,6 +112,7 @@ import { buildOutputFailureReason, executeSequentially, programmerOutputFailureR
 import { compareFirmwareReadback, snapshotFirmwareArtifact, validateFirmwareArtifact, validateStagedBinary } from "./qc1/artifactValidation";
 import type { FirmwareArtifactEvidence } from "./qc1/artifactValidation";
 import { formatHardwareResourceConflicts, HardwareResourceCoordinator, probeOpenOcdEndpoints } from "./qc1/hardwareResources";
+import { defaultResetProfile, isResetProfileSupportedByStFlash, normalizeStoredResetProfile, ProjectResetProfileStore, resetProfileStorageKey, ResetProfile, validateResetProfile } from "./qc1/resetConfiguration";
 
 // État partagé entre le contrôleur et la Webview QC1.
 let dashboardState: DashboardState = defaultDashboardState;
@@ -256,10 +257,14 @@ function operationConfigurationFingerprint(context?: vscode.ExtensionContext, in
   const workspaceRoot = getWorkspaceRoot() || process.cwd();
   const configuredPath = vscode.workspace.getConfiguration("qc1").get<string>("projectPath", "").trim();
   const projectPath = configuredPath ? resolveUserPath(configuredPath, workspaceRoot) : getWorkspaceRoot();
+  const resetKey = projectPath ? resetProfileStorageKey(projectPath) : "";
+  const resetProfile = context && resetKey
+    ? normalizeStoredResetProfile(context.globalState?.get(resetKey))
+    : defaultResetProfile;
   return JSON.stringify([vscode.workspace.getConfiguration("qc1").get("projectPath", ""), projectPath || "", ...[
     "buildDirectory", "buildType", "cmakePreset", "elfPath", "cm7ElfPath", "cm4ElfPath",
     "compilerPath", "openocdPath", "cmakePath", "stlinkPath", "targetMcu",
-  ].map((key) => config.get(key)), includeProbeSelection && context && projectPath ? readProjectProbeSerial(context, projectPath) : ""]);
+  ].map((key) => config.get(key)), includeProbeSelection && context && projectPath ? readProjectProbeSerial(context, projectPath) : "", resetProfile]);
 }
 
 
@@ -1382,7 +1387,7 @@ export async function writeH7BuildReport(status: Qc1Status, command: string): Pr
  * Décompose Build/Clean/Flash en vrais processus successifs. Ainsi stdout reste
  * disponible pendant l'exécution et le ProgressManager peut lire chaque `[x/y]`.
  */
-export function buildProcessInvocations(status: Qc1Status, command: string, stagingDirectory?: string): ProcessInvocation[] {
+export function buildProcessInvocations(status: Qc1Status, command: string, stagingDirectory?: string, resetProfile: ResetProfile = defaultResetProfile): ProcessInvocation[] {
   const config = qc1Configuration();
   const buildType = config.get<string>("buildType", "Debug");
   const action = command.split("-")[0];
@@ -1461,6 +1466,9 @@ export function buildProcessInvocations(status: Qc1Status, command: string, stag
   }
 
   if (!["flash", "run"].includes(action)) return invocations;
+  resetProfile = validateResetProfile(resetProfile);
+  if (!status.openocdOk && !isResetProfileSupportedByStFlash(resetProfile))
+    throw new Error("Le profil de reset sélectionné nécessite OpenOCD; st-flash ne documente que son reset par défaut.");
 
   const objcopyPath = objcopyPathForStatus(status);
 
@@ -1479,7 +1487,7 @@ export function buildProcessInvocations(status: Qc1Status, command: string, stag
         args: getOpenOcdMultiProgramArgs([
           { core: "cm7", elfPath: status.cm7ElfPath },
           { core: "cm4", elfPath: status.cm4ElfPath },
-        ], status.architecture.family, status.stlinkSerialNumber || undefined),
+        ], status.architecture.family, status.stlinkSerialNumber || undefined, resetProfile),
         inputArtifact: "h7Dual",
       });
       return invocations;
@@ -1490,7 +1498,7 @@ export function buildProcessInvocations(status: Qc1Status, command: string, stag
         phase: "flashing",
         label: `Flash ${targetCore?.toUpperCase() || "STM32"} avec OpenOCD`,
         executable: status.openocdPath,
-        args: getOpenOcdProgramArgs(elf, status.architecture.family, needsBothH755Targets(status.architecture), targetCore, status.stlinkSerialNumber || undefined, isKnownDualCoreH7Device(status.architecture.device)),
+        args: getOpenOcdProgramArgs(elf, status.architecture.family, needsBothH755Targets(status.architecture), targetCore, status.stlinkSerialNumber || undefined, isKnownDualCoreH7Device(status.architecture.device), resetProfile),
         core: targetCore,
         inputArtifact: "elf"
       });
@@ -1694,6 +1702,7 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
   private readonly discovery: ProjectDiscoveryController;
   private readonly recent: RecentProjectsController;
   private readonly configuration: ProjectConfigurationController;
+  private readonly resetProfiles: ProjectResetProfileStore;
   private readonly operationHistory = new ProjectOperationHistory();
   public static readonly viewType = "qc1.panel";
   private view?: vscode.WebviewView;
@@ -1703,6 +1712,10 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
     private readonly extensionUri: vscode.Uri,
     private readonly context: vscode.ExtensionContext
   ) {
+    this.resetProfiles = new ProjectResetProfileStore({
+      get: (key) => this.context.globalState.get<unknown>(key),
+      update: (key, value) => this.context.globalState.update(key, value),
+    });
     this.configuration = new ProjectConfigurationController({
       hasWorkspace: () => Boolean(vscode.workspace.workspaceFolders?.length || vscode.workspace.workspaceFile),
       update: (key, value, target) => {
@@ -2065,6 +2078,7 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
       openocdPath: config.get<string>("openocdPath", ""),
       serialPort: config.get<string>("serialPort", ""),
       baudRate: config.get<number>("baudRate", 19200),
+      resetProfile: this.resetProfiles.get(status.projectPath),
       stlinkPath: config.get<string>("stlinkPath", "st-info"),
       autoDetectProject: config.get<boolean>("autoDetectProject", true),
       autoClearOutput: config.get<boolean>("autoClearOutput", false),
@@ -2772,7 +2786,7 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
     try {
       if (programmingRequested)
         flashStagingDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), "qc1-flash-"));
-      invocations = buildProcessInvocations(toolStatus, command, flashStagingDirectory || undefined);
+      invocations = buildProcessInvocations(toolStatus, command, flashStagingDirectory || undefined, this.resetProfiles.get(toolStatus.projectPath));
       const environment = getExecutionEnv(toolStatus);
       if (toolStatus.cmakeProjectReady) {
         const query = path.join(toolStatus.buildPath, ".cmake", "api", "v1", "query", "client-qc1");
@@ -2921,7 +2935,7 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
           const openOcdProgrammer = invocation.executable === toolStatus.openocdPath;
           openOcdProgrammerUsed ||= openOcdProgrammer;
           programmerVerificationRequests.push(openOcdProgrammer && /\bverify\b/i.test(argumentsText));
-          programmerResetRequests.push(/(?:--reset|\breset\b)/i.test(argumentsText));
+          programmerResetRequests.push(/(?:--reset|\breset\b|soft_reset_halt)/i.test(argumentsText));
           recordOperation("programming", { status: "running", command, message: invocation.label, startedAt: programmingStartedAt });
           this.rememberProjectOperationSnapshot(projectDir, operationSnapshot, true);
         }
@@ -3026,7 +3040,8 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
         const label = core?.toUpperCase() || "STM32F1";
         if (!fileExists(executable)) throw new Error(`ELF ${label} introuvable après le build.`);
         const debugDevice = refreshed.architecture.device.replace(/ZITx$/i, "ZI");
-        const debugConfiguration = getCortexDebugConfiguration(projectDir, executable, refreshed.architecture.family, core, needsBothH755Targets(refreshed.architecture), refreshed.stlinkSerialNumber || undefined, debugDevice) as vscode.DebugConfiguration;
+        const resetProfile = this.resetProfiles.get(projectDir);
+        const debugConfiguration = getCortexDebugConfiguration(projectDir, executable, refreshed.architecture.family, core, needsBothH755Targets(refreshed.architecture), refreshed.stlinkSerialNumber || undefined, debugDevice, resetProfile) as vscode.DebugConfiguration;
         debugConfiguration.serverpath = refreshed.openocdPath;
         debugConfiguration.gdbPath = refreshed.gdbPath;
         debugSessionStartedAt = Date.now();
@@ -3136,11 +3151,18 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
           : "OpenOCD verify s'est terminé sans erreur détectée."
         : verificationStatus === "failed" ? readbackFailureMessage || "Lecture ou comparaison Flash échouée."
           : verificationStatus === "unknown" ? "La séquence OpenOCD s'est interrompue avant de confirmer séparément verify." : "Vérification non lancée.";
+      const resetProfile = this.resetProfiles.get(projectDir);
+      const resetMethod = ({
+        "backend-default": "défaut du backend",
+        software: "logiciel via OpenOCD",
+        "hardware-nrst": "matériel via NRST",
+        "connect-under-reset": "connexion sous NRST",
+      } as const)[resetProfile.mode];
       const resetMessage = resetStatus === "success"
         ? resetProcessCount > 0
-          ? "st-flash reset a terminé sans erreur détectée; write peut aussi avoir déclenché un reset; NRST effectif et démarrage non observés."
-          : "OpenOCD reset run a terminé sans erreur détectée; NRST effectif et démarrage non observés."
-        : resetStatus === "failed" ? "La commande st-flash reset a échoué."
+          ? "st-flash reset a terminé sans erreur détectée; le retour CLI ne confirme ni NRST effectif ni démarrage du firmware."
+          : `Séquence OpenOCD (${resetMethod}) terminée sans erreur détectée; NRST effectif et démarrage non observés.`
+        : resetStatus === "failed" ? resetProcessCount > 0 ? "La commande st-flash reset a échoué." : `La séquence OpenOCD (${resetMethod}) a échoué.`
           : resetStatus === "unknown" ? "La séquence OpenOCD s'est interrompue avant de confirmer reset." : "Reset non lancé.";
       recordOperation("programming", {
         status: programmingStatus,
@@ -3577,7 +3599,12 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
     const id = ++this.selectionGeneration;
     if (this.buildRunning) throw new Error("Impossible de changer les réglages pendant une opération QC1.");
     this.settingsUpdating++;
-    try { await this.configuration.update(input); }
+    const activeProjectPath = getQc1Status(this.context).projectPath;
+    try {
+      await this.configuration.update(input);
+      const profileProjectPath = activeProjectPath || getQc1Status(this.context).projectPath;
+      if (input.resetProfile && profileProjectPath) await this.resetProfiles.update(profileProjectPath, input.resetProfile);
+    }
     finally { this.settingsUpdating--; }
     if (id !== this.selectionGeneration || this.disposed) return;
     projectCache.clear();

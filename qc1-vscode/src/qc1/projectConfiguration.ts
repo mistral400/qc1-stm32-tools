@@ -1,3 +1,6 @@
+import { validateResetProfile } from "./resetConfiguration";
+import type { ResetProfile } from "./resetConfiguration";
+
 /** Window-wide projectPath; other QC1 settings retain their existing scopes. */
 export type ConfigurationWriteTarget = "workspace" | "global";
 export interface ProjectSettingsInput {
@@ -9,6 +12,7 @@ export interface ProjectSettingsInput {
   baudRate?: number;
   autoDiscoverProjects?: boolean;
   discoveryRoots?: string[];
+  resetProfile?: ResetProfile;
 }
 
 export interface ProjectConfigurationPort {
@@ -33,6 +37,7 @@ export function validateProjectSettings(input: ProjectSettingsInput): void {
     throw new Error("Baud rate invalide.");
   if (input.discoveryRoots && (input.discoveryRoots.length > 16 || input.discoveryRoots.some((root) => typeof root !== "string" || root.length > 4096 || root.includes("\0"))))
     throw new Error("Au maximum 16 racines de recherche sont autorisées.");
+  if (input.resetProfile !== undefined) validateResetProfile(input.resetProfile);
   for (const value of Object.values(input))
     if (typeof value === "string" && (value.length > 4096 || value.includes("\0")))
       throw new Error("Réglage QC1 invalide.");

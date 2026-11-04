@@ -27,6 +27,8 @@ function stateFor(family, ids) {
 test("navigation has five real pages and context actions preserve F1/H755 modes", () => {
   const html = getDashboardHtml(defaultDashboardState);
   for (const id of ["projectPanel", "buildPanel", "toolsPanel", "diagnosticsPanel", "settingsPanel"]) assert.ok(html.includes(`id="${id}"`));
+  assert.ok(html.includes('id="resetModeInput"'));
+  assert.ok(html.includes('value="connect-under-reset"'));
   assert.ok(availableProjectCommands(stateFor("STM32F1", ["cortex-m3"])).includes("debug"));
   assert.equal(availableProjectCommands(stateFor("STM32F1", ["cortex-m3"])).includes("debug-cm7"), false);
   assert.deepEqual(availableProjectCommands(stateFor("STM32H7", ["cm7"])).filter((command) => command.includes("cm")), ["build-cm7", "flash-cm7", "debug-cm7"]);
@@ -106,6 +108,9 @@ test("message parser validates command and settings shapes and rejects arbitrary
   const message = parseWebviewMessage({ type: "updateProjectSettings", projectPath: "x", buildType: "Debug", cmakePreset: "", discoveryRoots: ["~/Code"], arbitrary: "ignored" });
   assert.equal(message.arbitrary, undefined);
   assert.deepEqual(message.discoveryRoots, ["~/Code"]);
+  assert.deepEqual(parseWebviewMessage({ type: "updateProjectSettings", projectPath: "x", buildType: "Debug", cmakePreset: "", resetProfile: { mode: "connect-under-reset", srstDelayMs: 80 } }).resetProfile,
+    { mode: "connect-under-reset", srstDelayMs: 80 });
+  assert.equal(parseWebviewMessage({ type: "updateProjectSettings", projectPath: "x", buildType: "Debug", cmakePreset: "", resetProfile: { mode: "run arbitrary Tcl" } }), undefined);
   assert.deepEqual(parseWebviewMessage({ type: "useRecentProject", projectPath: "external" }), { type: "useRecentProject", projectPath: "external" });
   assert.deepEqual(parseWebviewMessage({ type: "selectStlink" }), { type: "selectStlink" });
   assert.equal(parseWebviewMessage({ type: "openDiagnosticFile", index: -1 }), undefined);
@@ -154,12 +159,15 @@ test("client route persists, click messages are mapped, and settings submit is c
   assert.equal(client.persistent().activePanel, "buildPanel");
   client.node("projectPathInput").value = "~/Code/firmware";
   client.node("buildTypeInput").value = "Release"; client.node("cmakePresetInput").value = "release";
+  client.node("resetModeInput").value = "backend-default";
   client.node("baudRateInput").value = "115200"; client.node("discoveryRootsInput").value = "~/Code\n~/Documents/STM32\n";
   client.node("projectSettingsForm").listeners.submit({ preventDefault() {} });
   const message = client.messages.at(-1);
   assert.equal(message.type, "updateProjectSettings");
   assert.equal(message.buildType, "Release");
   assert.equal(message.baudRate, 115200);
+  assert.equal(message.resetProfile.mode, "backend-default");
+  assert.equal(message.resetProfile.adapterSpeedKHz, undefined);
   assert.deepEqual(Array.from(message.discoveryRoots), ["~/Code", "~/Documents/STM32"]);
 });
 
@@ -171,9 +179,21 @@ test("client host updates preserve terminal output and unsaved settings", () => 
   assert.equal(client.node("output").textContent, output);
   assert.equal(client.node("projectContent").innerHTML, "<h2>Safe host HTML</h2>");
   client.node("projectPathInput").value = "unsaved";
+  client.node("resetModeInput").value = "unsaved-mode";
   client.events.input({ target: client.node("projectPathInput") });
   client.receive({ type: "settings", settings: { projectPath: "persisted", discoveryRoots: [] } });
   assert.equal(client.node("projectPathInput").value, "unsaved");
+  client.receive({ type: "settings", settings: { resetProfile: { mode: "hardware-nrst", adapterSpeedKHz: 500, srstDelayMs: 80 } } });
+  assert.equal(client.node("resetModeInput").value, "unsaved-mode", "dirty settings remain untouched until saved or reloaded");
+});
+
+test("client restores the active project's reset profile when settings are clean", () => {
+  const client = clientHarness();
+  client.receive({ type: "settings", settings: { resetProfile: { mode: "connect-under-reset", adapterSpeedKHz: 500, srstPulseWidthMs: 12, srstDelayMs: 75 } } });
+  assert.equal(client.node("resetModeInput").value, "connect-under-reset");
+  assert.equal(client.node("adapterSpeedKHzInput").value, 500);
+  assert.equal(client.node("srstPulseWidthMsInput").value, 12);
+  assert.equal(client.node("srstDelayMsInput").value, 75);
 });
 
 test("scan roots expand home syntax but never expand into whole-machine scans", () => {

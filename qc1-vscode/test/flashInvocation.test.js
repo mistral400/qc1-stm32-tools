@@ -90,3 +90,16 @@ test("st-flash refuses to plan a fallback when objcopy is missing", t => {
   };
   assert.throws(() => buildProcessInvocations(status, "flash", path.join(root, "stage")), /objcopy est requis/);
 });
+
+test("st-flash refuses OpenOCD-only reset profiles before planning a flash", () => {
+  const { buildProcessInvocations } = loadExtensionWithVscodeMock();
+  const status = {
+    projectPath: "/firmware", cmakeSourcePath: "/firmware", buildPath: "/firmware/build", nativeCmakeOk: true,
+    cmakeConfigurePreset: "", cmakeBuildPreset: "", cmakePath: "/tools/cmake", compilerOk: true,
+    architecture: { family: "stm32f1", device: "STM32F103xB", coreMode: "single", cm7: { present: false }, cm4: { present: false } },
+    cm7ElfPath: "", cm4ElfPath: "", elfPath: "/firmware/build/main.elf", linkerScriptPath: "/firmware/linker.ld",
+    stFlashPath: "/tools/st-flash", openocdOk: false,
+  };
+  assert.throws(() => buildProcessInvocations(status, "flash", "/tmp/stage", { mode: "hardware-nrst" }), /nécessite OpenOCD/);
+  assert.throws(() => buildProcessInvocations(status, "flash", "/tmp/stage", { mode: "backend-default", adapterSpeedKHz: 400 }), /nécessite OpenOCD/);
+});

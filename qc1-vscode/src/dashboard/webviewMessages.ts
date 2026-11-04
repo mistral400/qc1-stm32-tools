@@ -1,4 +1,5 @@
 import type { ProjectSettingsInput } from "../qc1/projectConfiguration";
+import { validateResetProfile } from "../qc1/resetConfiguration";
 
 export const qc1Commands = [
   "build", "clean", "rebuild", "tsmake", "flash", "debug", "build-cm7", "build-cm4",
@@ -52,6 +53,10 @@ export function parseWebviewMessage(value: unknown): WebviewMessage | undefined 
     if (input.discoveryRoots !== undefined) {
       if (!Array.isArray(input.discoveryRoots) || input.discoveryRoots.some((root) => typeof root !== "string")) return;
       result.discoveryRoots = input.discoveryRoots;
+    }
+    if (input.resetProfile !== undefined) {
+      try { result.resetProfile = validateResetProfile(input.resetProfile); }
+      catch { return; }
     }
     return { type: "updateProjectSettings", ...result };
   }

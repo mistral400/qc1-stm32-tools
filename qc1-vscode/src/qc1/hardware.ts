@@ -1,6 +1,7 @@
 import { isStm32H7Family, Qc1Core, Qc1McuFamily } from "./targetArchitecture";
 import { runProcess } from "./processTools";
 import { isValidStlinkSerial, redactStlinkSerials } from "./probeSelection";
+import { defaultResetProfile, ResetProfile, validateResetProfile } from "./resetConfiguration";
 
 export type StlinkProbeStatus = "OK" | "non détecté" | "non testé";
 
@@ -69,6 +70,7 @@ export function getOpenOcdProgramArgs(
   core?: Qc1Core,
   serialNumber?: string,
   selectCoreTarget = false,
+  resetProfile: ResetProfile = defaultResetProfile,
 ): string[] {
   // Tcl has its own quoting rules even when spawn(shell:false) is used.
   const normalized = elfPath.replace(/\\/g, "/");
@@ -77,7 +79,31 @@ export function getOpenOcdProgramArgs(
   const selectTarget = dualTarget && core
     ? `${core === "cm4" ? "targets stm32h7x.cpu1; " : "targets stm32h7x.cpu0; "}`
     : "";
-  return [...getOpenOcdServerArgs(family, dualCore || (isStm32H7Family(family) && core === "cm4"), serialNumber), "-c", `${selectTarget}program {${normalized}} verify reset exit`];
+  const profile = validateResetProfile(resetProfile);
+  const configuration = getOpenOcdResetConfigurationCommands(profile);
+  const completion = getOpenOcdResetCompletion(profile);
+  const program = profile.mode === "backend-default"
+    ? `${selectTarget}program {${normalized}} verify reset exit`
+    : `${selectTarget}program {${normalized}} verify; ${completion}; shutdown`;
+  return [...getOpenOcdServerArgs(family, dualCore || (isStm32H7Family(family) && core === "cm4"), serialNumber),
+    ...configuration.flatMap((command) => ["-c", command]), "-c", program];
+}
+
+export function getOpenOcdResetConfigurationCommands(value: ResetProfile): string[] {
+  const profile = validateResetProfile(value);
+  const commands: string[] = [];
+  if (profile.adapterSpeedKHz !== undefined) commands.push(`adapter speed ${profile.adapterSpeedKHz}`);
+  if (profile.srstPulseWidthMs !== undefined) commands.push(`adapter srst pulse_width ${profile.srstPulseWidthMs}`);
+  if (profile.srstDelayMs !== undefined) commands.push(`adapter srst delay ${profile.srstDelayMs}`);
+  if (profile.mode === "software") commands.push("reset_config signals none srst_nogate", "cortex_m reset_config sysresetreq");
+  if (profile.mode === "hardware-nrst") commands.push("reset_config srst_only srst_nogate");
+  if (profile.mode === "connect-under-reset") commands.push("reset_config srst_only srst_nogate connect_assert_srst");
+  return commands;
+}
+
+export function getOpenOcdResetCompletion(value: ResetProfile): string {
+  validateResetProfile(value);
+  return "reset run";
 }
 
 /** Program and verify both H7 images before resetting the dual-core target once. */
@@ -85,19 +111,24 @@ export function getOpenOcdMultiProgramArgs(
   artifacts: Array<{ core: Qc1Core; elfPath: string }>,
   family: Qc1McuFamily,
   serialNumber?: string,
+  resetProfile: ResetProfile = defaultResetProfile,
 ): string[] {
   if (!isStm32H7Family(family) || artifacts.length !== 2 || new Set(artifacts.map(item => item.core)).size !== 2 ||
     !artifacts.some(item => item.core === "cm7") || !artifacts.some(item => item.core === "cm4"))
     throw new Error("Le flash dual-core STM32H7 exige un ELF CM7 et un ELF CM4.");
   const ordered = [...artifacts].sort((left, right) => left.core === "cm7" ? -1 : right.core === "cm7" ? 1 : 0);
+  const profile = validateResetProfile(resetProfile);
   const commands = ordered.map((artifact, index) => {
     const normalized = artifact.elfPath.replace(/\\/g, "/");
     if (!normalized || /[{}\r\n\u0000]/.test(normalized)) throw new Error("Chemin ELF non représentable dans la commande Tcl OpenOCD.");
     const cpu = artifact.core === "cm7" ? 0 : 1;
-    const finish = index === ordered.length - 1 ? " reset exit" : "";
+    const finish = index === ordered.length - 1
+      ? profile.mode === "backend-default" ? " reset exit" : `; ${getOpenOcdResetCompletion(profile)}; shutdown`
+      : "";
     return `targets stm32h7x.cpu${cpu}; program {${normalized}} verify${finish}`;
   });
-  return [...getOpenOcdServerArgs(family, true, serialNumber), "-c", commands.join("; ")];
+  return [...getOpenOcdServerArgs(family, true, serialNumber),
+    ...getOpenOcdResetConfigurationCommands(profile).flatMap((command) => ["-c", command]), "-c", commands.join("; ")];
 }
 
 export function getStFlashWriteArgs(binPath: string, address = "0x08000000", serialNumber?: string): string[] {
@@ -138,6 +169,7 @@ export function getCortexDebugConfiguration(
   dualCore = false,
   serialNumber?: string,
   targetDevice?: string,
+  resetProfile: ResetProfile = defaultResetProfile,
 ): Record<string, unknown> {
   const h7 = isStm32H7Family(family);
   const h755 = family === "stm32h755";
@@ -162,6 +194,8 @@ export function getCortexDebugConfiguration(
     configuration.targetProcessor = core === "cm4" ? 1 : 0;
     configuration.openOCDPreConfigLaunchCommands = ["set DUAL_CORE 1", "set DUAL_BANK 1"];
   }
+  const resetCommands = getOpenOcdResetConfigurationCommands(resetProfile);
+  if (resetCommands.length) configuration.openOCDLaunchCommands = resetCommands;
   return configuration;
 }
 

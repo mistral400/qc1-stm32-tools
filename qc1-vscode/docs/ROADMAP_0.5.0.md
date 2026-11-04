@@ -43,9 +43,9 @@ Les deux tests ignorés nécessitent `QC1_CUBE_H7_PATH` (installation locale STM
 
 ## État de travail
 
-Inspection et baseline terminées. Jalons 0.4.1 et 0.4.2 validés et checkpointés localement. Jalon actif : **0.4.3 — suivi des sessions matérielles et conflits**.
+Inspection et baseline terminées. Jalons 0.4.1, 0.4.2 et 0.4.3 validés et checkpointés localement; 0.4.4 est validé par les contrôles logiciels locaux. Prochain jalon : **0.4.5 — modernisation du Webview**.
 
-### Tranche de code en cours — 0.4.1
+### Jalon validé et checkpointé localement — 0.4.1
 
 - Ajout de résultats typés pour Build, validation d'artefact, programmation, vérification, reset, session Debug et exécution.
 - Le tableau Build affiche les étapes séparément; les résultats sont conservés dans un historique borné par projet pendant la session.
@@ -56,7 +56,7 @@ Inspection et baseline terminées. Jalons 0.4.1 et 0.4.2 validés et checkpoint�
 - Packaging 0.4.1 : PASS, `qc1-vscode/qc1-stm32-tools-0.4.1.vsix` (101 fichiers, 336,78 KB); `unzip -t` confirme l'intégrité de l'archive.
 - Aucun test CI distant ni test matériel n'a été effectué. La tranche est localement validée; tag/commit de jalon à enregistrer avant de poursuivre.
 
-### Tranche de code en cours — 0.4.2
+### Jalon validé et checkpointé localement — 0.4.2
 
 - `src/qc1/artifactValidation.ts` vérifie l'ELF associé à une cible CMake exécutable unique, son périmètre projet/build, sa taille et son empreinte SHA-256; les backends reçoivent un snapshot privé vérifié. Le module valide aussi le BIN temporaire et compare les octets lus après programmation.
 - OpenOCD reçoit l'ELF validé avec sa séquence `program … verify reset exit`. Le fallback st-flash produit un BIN neuf dans un répertoire temporaire, écrit, relit la plage exacte, compare le résultat puis demande un reset distinct. Tout échec arrête les étapes suivantes; aucun ancien BIN n'est utilisé.
@@ -76,4 +76,13 @@ Inspection et baseline terminées. Jalons 0.4.1 et 0.4.2 validés et checkpoint�
 - Validation logicielle : `npm test` PASS (162, 2 ignorés, 164 total), `npm run typecheck` PASS, `npm run lint` PASS, `git diff --check` PASS.
 - VS Code 1.144.1 / macOS arm64, fenêtre sans workspace : activation et commandes publiques PASS (1 test); aucun test matériel n'est lancé.
 - Packaging local PASS : `qc1-stm32-tools-0.4.3.vsix` (105 fichiers), ZIP valide et version 0.4.3 du manifeste confirmée.
-- Validation locale uniquement; aucune publication ni CI distante. Le jalon 0.4.4 — configuration du reset — reste à faire.
+- Validation locale uniquement; aucune publication ni CI distante. Aucun test de reset ou autre test matériel n'est effectué.
+
+### Jalon 0.4.4 — profils de reset OpenOCD par projet
+
+- `src/qc1/resetConfiguration.ts` valide des modes par défaut, SYSRESETREQ, NRST et connexion sous reset ainsi que les limites de vitesse SWD et de temporisation. Les profils sont persistés sous un SHA-256 du chemin normalisé, sans enregistrer ce chemin dans la valeur.
+- `src/qc1/hardware.ts` traduit uniquement ces choix autorisés en commandes OpenOCD; Flash F1/H7 et Cortex-Debug reçoivent le profil. Le mode backend par défaut conserve les arguments existants. Un profil personnalisé est refusé avant le pipeline Flash si seul `st-flash` est disponible.
+- Le panneau Réglages expose les options avec un avertissement NRST et préserve les valeurs non enregistrées lors des rafraîchissements. L'état du profil est inclus dans l'empreinte de configuration d'opération.
+- Validation : `npm test` PASS (169, 2 ignorés, 171 total), `npm run typecheck` PASS, `npm run lint` PASS, `git diff --check` PASS.
+- VS Code 1.144.1 / macOS arm64, fenêtre sans workspace : activation/commandes publiques PASS (1 test).
+- Packaging local PASS : `qc1-stm32-tools-0.4.4.vsix` (107 fichiers), ZIP valide et manifeste version 0.4.4 confirmé. Aucun test matériel ni CI distante.

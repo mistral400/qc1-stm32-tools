@@ -33,6 +33,37 @@ test("builds configured OpenOCD STM32F1 arguments", () => {
   ]);
 });
 
+test("OpenOCD reset profiles are explicit, ordered before programming and never interpolate raw commands", () => {
+  const software = getOpenOcdProgramArgs("/tmp/f103.elf", "stm32f1", false, undefined, undefined, false, { mode: "software" });
+  assert.deepEqual(software.slice(4), ["-c", "reset_config signals none srst_nogate", "-c", "cortex_m reset_config sysresetreq", "-c", "program {/tmp/f103.elf} verify; reset run; shutdown"]);
+  assert.match(software.at(-1), /reset run; shutdown/);
+  assert.doesNotMatch(software.join(" "), /soft_reset_halt/);
+
+  const hardware = getOpenOcdProgramArgs("/tmp/f103.elf", "stm32f1", false, undefined, undefined, false, {
+    mode: "hardware-nrst", adapterSpeedKHz: 800, srstPulseWidthMs: 20, srstDelayMs: 150,
+  });
+  assert.deepEqual(hardware.slice(4, 12), [
+    "-c", "adapter speed 800", "-c", "adapter srst pulse_width 20", "-c", "adapter srst delay 150", "-c", "reset_config srst_only srst_nogate",
+  ]);
+  assert.match(hardware.at(-1), /program \{\/tmp\/f103\.elf\} verify; reset run; shutdown/);
+  assert.throws(() => getOpenOcdProgramArgs("/tmp/a} ; reset; {b.elf"), /Tcl OpenOCD/);
+
+  const underReset = getOpenOcdProgramArgs("/tmp/f103.elf", "stm32f1", false, undefined, undefined, false, { mode: "connect-under-reset" });
+  assert.ok(underReset.includes("reset_config srst_only srst_nogate connect_assert_srst"));
+});
+
+test("OpenOCD reset profiles apply once after both H7 images and configure Cortex-Debug", () => {
+  const profile = { mode: "connect-under-reset", srstDelayMs: 100 };
+  const args = getOpenOcdMultiProgramArgs([
+    { core: "cm7", elfPath: "/build/cm7.elf" }, { core: "cm4", elfPath: "/build/cm4.elf" },
+  ], "stm32h755", undefined, profile);
+  assert.ok(args.includes("reset_config srst_only srst_nogate connect_assert_srst"));
+  assert.match(args.at(-1), /program \{\/build\/cm4\.elf\} verify; reset run; shutdown$/);
+  assert.equal((args.at(-1).match(/reset run/g) || []).length, 1);
+  const debug = getCortexDebugConfiguration("/f103", "/f103/build/main.elf", "stm32f1", undefined, false, undefined, "STM32F103", profile);
+  assert.deepEqual(debug.openOCDLaunchCommands, ["adapter srst delay 100", "reset_config srst_only srst_nogate connect_assert_srst"]);
+});
+
 test("routes OpenOCD, st-flash, and Cortex-Debug to an explicitly selected ST-Link", () => {
   const serial = "303030303030303030303030";
   assert.deepEqual(getOpenOcdServerArgs("stm32f1", false, serial), [
