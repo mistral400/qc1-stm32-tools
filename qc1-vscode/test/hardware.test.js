@@ -6,6 +6,8 @@ const {
   getOpenOcdMultiProgramArgs,
   getOpenOcdServerArgs,
   getStFlashWriteArgs,
+  getStFlashReadArgs,
+  getStFlashResetArgs,
   getCortexDebugConfiguration,
   readFlashOrigin,
   readStlinkProbeModel,
@@ -40,16 +42,20 @@ test("routes OpenOCD, st-flash, and Cortex-Debug to an explicitly selected ST-Li
     "-f", "interface/stlink-dap.cfg", "-c", `adapter serial ${serial}`, "-c", "transport select dapdirect_swd",
     "-c", "set DUAL_CORE 1", "-c", "set DUAL_BANK 1", "-f", "target/stm32h7x.cfg"
   ]);
-  assert.deepEqual(getStFlashWriteArgs("firmware.bin", "0x08000000", serial), ["--serial", serial, "--reset", "write", "firmware.bin", "0x08000000"]);
+  assert.deepEqual(getStFlashWriteArgs("firmware.bin", "0x08000000", serial), ["--serial", serial, "write", "firmware.bin", "0x08000000"]);
+  assert.deepEqual(getStFlashReadArgs("readback.bin", "0x08000000", 1024, serial), ["--serial", serial, "read", "readback.bin", "0x08000000", "0x400"]);
+  assert.deepEqual(getStFlashResetArgs(serial), ["--serial", serial, "reset"]);
   assert.equal(getCortexDebugConfiguration("/project", "/build/app.elf", "stm32f1", undefined, false, serial).serialNumber, serial);
   assert.throws(() => getStFlashWriteArgs("firmware.bin", "0x08000000", "not-a-serial"), /série ST-Link invalide/);
   assert.throws(() => getOpenOcdServerArgs("stm32f1", false, "not-a-serial"), /série ST-Link invalide/);
 });
 
-test("requests a reset from the st-flash fallback", () => {
-  assert.deepEqual(getStFlashWriteArgs("firmware.bin"), [
-    "--reset", "write", "firmware.bin", "0x08000000"
-  ]);
+test("st-flash write, independent read and reset are separate commands", () => {
+  assert.deepEqual(getStFlashWriteArgs("firmware.bin"), ["write", "firmware.bin", "0x08000000"]);
+  assert.deepEqual(getStFlashReadArgs("readback.bin", "0x08000000", 0x100), ["read", "readback.bin", "0x08000000", "0x100"]);
+  assert.deepEqual(getStFlashResetArgs(), ["reset"]);
+  assert.throws(() => getStFlashReadArgs("readback.bin", "0x08000000", 0), /Taille/);
+  assert.throws(() => getStFlashReadArgs("readback.bin", "0xnot-hex", 4), /Adresse/);
 });
 
 test("selects STM32H7 OpenOCD and the requested core", () => {
@@ -65,7 +71,7 @@ test("selects STM32H7 OpenOCD and the requested core", () => {
 test("derives st-flash addresses from linker MEMORY instead of core assumptions", () => {
   const linker = "MEMORY\n{\n  FLASH (rx) : ORIGIN = 0x08100000, LENGTH = 1024K\n  RAM (xrw) : ORIGIN = 0x24000000, LENGTH = 512K\n}\n";
   assert.equal(readFlashOrigin(linker), "0x08100000");
-  assert.deepEqual(getStFlashWriteArgs("cm4.bin", "0x08100000"), ["--reset", "write", "cm4.bin", "0x08100000"]);
+  assert.deepEqual(getStFlashWriteArgs("cm4.bin", "0x08100000"), ["write", "cm4.bin", "0x08100000"]);
 });
 
 test("creates separate Cortex-Debug launch configurations for H755 cores", () => {

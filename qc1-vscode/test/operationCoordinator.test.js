@@ -37,5 +37,7 @@ test("warnings alone do not fail a successful build stage", () => {
 test("explicit programmer errors are not hidden by a zero exit status", () => {
   assert.match(programmerOutputFailureReason("", "Error: init mode failed (unable to connect to ST-Link)"), /Error: init mode failed/);
   assert.match(programmerOutputFailureReason("st-flash: ERROR: verification failed", ""), /verification failed/);
+  assert.match(programmerOutputFailureReason("Error: reset run failed", ""), /reset run failed/);
+  assert.match(programmerOutputFailureReason("st-flash: ERROR: read failed", ""), /read failed/);
   assert.equal(programmerOutputFailureReason("Info : STLINK V2J45\nTarget voltage: 3.3V", ""), undefined);
 });

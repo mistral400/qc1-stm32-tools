@@ -15,7 +15,7 @@ export function resolveBuildStatus(input: {
   requested: boolean;
   processSucceeded?: boolean;
   commandFailed: boolean;
-  failurePhase?: "configuring" | "cleaning" | "building" | "flashing";
+  failurePhase?: string;
 }): QC1OperationStatus {
   if (!input.requested) return "not-run";
   if (input.processSucceeded === true) return "success";

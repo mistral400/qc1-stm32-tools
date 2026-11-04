@@ -74,6 +74,7 @@ const managerUiState_1 = require("./dashboard/managerUiState");
 const webviewMessages_1 = require("./dashboard/webviewMessages");
 const operationHistory_1 = require("./qc1/operationHistory");
 const operationCoordinator_1 = require("./qc1/operationCoordinator");
+const artifactValidation_1 = require("./qc1/artifactValidation");
 // État partagé entre le contrôleur et la Webview QC1.
 let dashboardState = dashboardState_1.defaultDashboardState;
 let dashboardPanel;
@@ -1156,7 +1157,7 @@ async function writeH7BuildReport(status, command) {
  * Décompose Build/Clean/Flash en vrais processus successifs. Ainsi stdout reste
  * disponible pendant l'exécution et le ProgressManager peut lire chaque `[x/y]`.
  */
-function buildProcessInvocations(status, command) {
+function buildProcessInvocations(status, command, stagingDirectory) {
     const config = qc1Configuration();
     const buildType = config.get("buildType", "Debug");
     const action = command.split("-")[0];
@@ -1252,33 +1253,60 @@ function buildProcessInvocations(status, command) {
         }
         return invocations;
     }
+    if (!stagingDirectory)
+        throw new Error("Dossier temporaire de flash requis pour créer une image BIN isolée.");
+    const conversions = [];
+    const writes = [];
+    const verifications = [];
     for (const targetCore of cores) {
         const elf = targetCore === "cm7" ? status.cm7ElfPath : targetCore === "cm4" ? status.cm4ElfPath : status.elfPath;
-        const bin = targetCore === "cm7" ? status.cm7BinPath : targetCore === "cm4" ? status.cm4BinPath : status.binPath;
         const linker = targetCore ? status.architecture[targetCore].linkerScriptPath : status.linkerScriptPath;
         const flashOrigin = (0, hardware_1.readFlashOrigin)((0, filesystem_1.readText)(linker));
         if (!flashOrigin)
             throw new Error(`Adresse de flash non résolue dans le linker ${targetCore?.toUpperCase() || "STM32"}; utilise OpenOCD avec l'ELF.`);
-        if (fileExists(objcopyPath)) {
-            invocations.push({
-                phase: "flashing",
-                label: `Création du binaire ${targetCore?.toUpperCase() || "STM32"}`,
-                executable: objcopyPath,
-                args: ["-O", "binary", "-S", elf, bin],
-                core: targetCore,
-                inputArtifact: "elf"
-            });
-        }
-        invocations.push({
+        if (!fileExists(objcopyPath))
+            throw new Error("arm-none-eabi-objcopy est requis pour générer une image BIN fraîche; aucun ancien BIN ne sera utilisé.");
+        const coreLabel = targetCore?.toUpperCase() || "STM32";
+        const bin = path.join(stagingDirectory, `${targetCore || "stm32"}.bin`);
+        const readback = path.join(stagingDirectory, `${targetCore || "stm32"}.readback.bin`);
+        conversions.push({
             phase: "flashing",
-            label: `Flash ${targetCore?.toUpperCase() || "STM32"} avec st-flash`,
+            label: `Conversion ELF vers BIN ${coreLabel}`,
+            executable: objcopyPath,
+            args: ["-O", "binary", "-S", elf, bin],
+            core: targetCore,
+            inputArtifact: "elf",
+            sourceArtifactPath: elf,
+            outputArtifactPath: bin,
+        });
+        writes.push({
+            phase: "flashing",
+            label: `Programmation ${coreLabel} avec st-flash`,
             executable: status.stFlashPath,
             args: (0, hardware_1.getStFlashWriteArgs)(bin, flashOrigin, status.stlinkSerialNumber || undefined),
             core: targetCore,
-            inputArtifact: "bin"
+            inputArtifact: "bin",
+            sourceArtifactPath: bin,
+            flashAddress: flashOrigin,
+        });
+        verifications.push({
+            phase: "verifying",
+            label: `Lecture et comparaison Flash ${coreLabel}`,
+            executable: status.stFlashPath,
+            args: [],
+            core: targetCore,
+            inputArtifact: "readback",
+            sourceArtifactPath: bin,
+            outputArtifactPath: readback,
+            flashAddress: flashOrigin,
         });
     }
-    return invocations;
+    return [...invocations, ...conversions, ...writes, ...verifications, {
+            phase: "resetting",
+            label: "Reset STM32 après vérification",
+            executable: status.stFlashPath,
+            args: (0, hardware_1.getStFlashResetArgs)(status.stlinkSerialNumber || undefined),
+        }];
 }
 /** Lance un processus sans shell et retransmet stdout/stderr dès leur arrivée. */
 function runSpawnedProcess(invocation, cwd, env, onStdout, onStderr) {
@@ -2358,7 +2386,7 @@ class QC1PanelProvider {
         if (buildRequested)
             recordOperation("build", { status: "running", command, message: "Préparation du build", startedAt: operationStartedAt });
         if (programmingRequested) {
-            recordOperation("artifactValidation", { status: "unknown", command, message: "La présence des fichiers sera contrôlée; provenance et fraîcheur non garanties.", startedAt: operationStartedAt });
+            recordOperation("artifactValidation", { status: "running", command, message: "Validation de la cible CMake et de l'artefact après le build.", startedAt: operationStartedAt });
             recordOperation("programming", { status: "not-run", command, message: "En attente du build et de la préparation." });
             recordOperation("verification", { status: "not-run", command, message: "En attente de la programmation." });
             recordOperation("reset", { status: "not-run", command, message: "En attente de la programmation." });
@@ -2426,6 +2454,7 @@ class QC1PanelProvider {
         };
         const executedCommands = [];
         let invocations;
+        let flashStagingDirectory = "";
         let failedResult;
         let failedInvocation;
         let activeInvocation;
@@ -2438,14 +2467,39 @@ class QC1PanelProvider {
         let successfulProgrammerProcessCount = 0;
         const programmerVerificationRequests = [];
         const programmerResetRequests = [];
+        let verificationProcessCount = 0;
+        let successfulVerificationProcessCount = 0;
+        let resetProcessCount = 0;
+        let successfulResetProcessCount = 0;
+        let readbackFailureMessage = "";
+        let artifactValidationMessage = "";
+        const artifactEvidenceByPath = new Map();
+        const validateSelectedElf = (status, artifactPath, core) => {
+            const fileApi = (0, cmakeFileApi_1.readFileApi)(status.buildPath, status.cmakeSourcePath);
+            const targets = (0, targetArchitecture_1.isStm32H7Family)(status.architecture.family)
+                ? (0, coreBuild_1.readCoreBuildMetadata)(status.cmakeSourcePath, status.buildPath, qc1Configuration().get("buildType", "Debug")).artifactTargets
+                : fileApi.targets;
+            return (0, artifactValidation_1.validateFirmwareArtifact)({
+                artifactPath,
+                projectRoot: status.projectPath,
+                buildRoot: status.buildPath,
+                sourceRoot: fileApi.source,
+                targets,
+                core,
+                allowSourceLessTarget: (0, targetArchitecture_1.isStm32H7Family)(status.architecture.family),
+            });
+        };
         let openOcdProgrammerUsed = false;
         let artifactValidationAttempted = false;
+        let artifactValidationSucceeded = false;
         let artifactValidationFailed = false;
         let debugSessionStartedAt;
         let debugSessionSucceeded = false;
         let probePrepared = false;
         try {
-            invocations = buildProcessInvocations(toolStatus, command);
+            if (programmingRequested)
+                flashStagingDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), "qc1-flash-"));
+            invocations = buildProcessInvocations(toolStatus, command, flashStagingDirectory || undefined);
             const environment = getExecutionEnv(toolStatus);
             if (toolStatus.cmakeProjectReady) {
                 const query = path.join(toolStatus.buildPath, ".cmake", "api", "v1", "query", "client-qc1");
@@ -2482,47 +2536,104 @@ class QC1PanelProvider {
                 if (invocation.phase === "flashing") {
                     const refreshed = getQc1Status(this.context);
                     const refreshedElf = invocation.core === "cm7" ? refreshed.cm7ElfPath : invocation.core === "cm4" ? refreshed.cm4ElfPath : refreshed.elfPath;
-                    const refreshedBin = invocation.core === "cm7" ? refreshed.cm7BinPath : invocation.core === "cm4" ? refreshed.cm4BinPath : refreshed.binPath;
                     artifactValidationAttempted = true;
-                    if (invocation.inputArtifact === "h7Dual" && (!fileExists(refreshed.cm7ElfPath) || !fileExists(refreshed.cm4ElfPath))) {
-                        artifactValidationFailed = true;
-                        recordOperation("artifactValidation", { status: "failed", command, message: "ELF CM7 ou CM4 manquant.", startedAt: operationStartedAt });
-                        throw new Error("Flash H7 dual-core arrêté : les deux ELF CM7 et CM4 doivent exister avant la programmation.");
+                    if (invocation.inputArtifact === "h7Dual") {
+                        const coreEvidence = ["cm7", "cm4"].map((core) => ({
+                            core,
+                            evidence: validateSelectedElf(refreshed, core === "cm7" ? refreshed.cm7ElfPath : refreshed.cm4ElfPath, core),
+                        }));
+                        const invalid = coreEvidence.find((item) => !item.evidence.valid);
+                        if (invalid) {
+                            artifactValidationFailed = true;
+                            artifactValidationMessage = `${invalid.core.toUpperCase()} : ${invalid.evidence.reason}`;
+                            recordOperation("artifactValidation", { status: "failed", command, message: artifactValidationMessage, startedAt: operationStartedAt });
+                            throw new Error(`Flash H7 dual-core arrêté : ${artifactValidationMessage}`);
+                        }
+                        const snapshots = await Promise.all(coreEvidence.map(async ({ core, evidence }) => ({
+                            core,
+                            evidence: await (0, artifactValidation_1.snapshotFirmwareArtifact)(evidence, flashStagingDirectory, `${core}.elf`),
+                        })));
+                        const invalidSnapshot = snapshots.find((item) => !item.evidence.valid);
+                        if (invalidSnapshot) {
+                            artifactValidationFailed = true;
+                            artifactValidationMessage = `${invalidSnapshot.core.toUpperCase()} : ${invalidSnapshot.evidence.reason}`;
+                            recordOperation("artifactValidation", { status: "failed", command, message: artifactValidationMessage, startedAt: operationStartedAt });
+                            throw new Error(`Flash H7 dual-core arrêté : ${artifactValidationMessage}`);
+                        }
+                        artifactValidationMessage = snapshots.map(({ core, evidence }) => {
+                            artifactEvidenceByPath.set(evidence.artifactPath, evidence);
+                            return `${core.toUpperCase()} ${evidence.targetName} (${evidence.sizeBytes} octets, SHA-256 ${evidence.sha256.slice(0, 12)}…)`;
+                        }).join("; ");
+                        artifactValidationSucceeded = true;
+                        invocation.args = (0, hardware_1.getOpenOcdMultiProgramArgs)([
+                            { core: "cm7", elfPath: snapshots[0].evidence.artifactPath },
+                            { core: "cm4", elfPath: snapshots[1].evidence.artifactPath },
+                        ], refreshed.architecture.family, refreshed.stlinkSerialNumber || undefined);
                     }
-                    if (invocation.inputArtifact === "elf" && !fileExists(refreshedElf)) {
-                        artifactValidationFailed = true;
-                        recordOperation("artifactValidation", { status: "failed", command, message: `ELF ${invocation.core?.toUpperCase() || "STM32"} absent.`, startedAt: operationStartedAt });
-                        throw new Error(`ELF ${invocation.core?.toUpperCase() || "STM32"} introuvable: configure le projet pour alimenter la CMake File API ou règle qc1.${invocation.core ? `${invocation.core}ElfPath` : "elfPath"}.`);
-                    }
-                    recordOperation("artifactValidation", {
-                        status: "unknown",
-                        command,
-                        message: "Fichier présent; provenance et fraîcheur non vérifiées.",
-                        startedAt: operationStartedAt,
-                    });
-                    if (invocation.executable === toolStatus.openocdPath) {
-                        invocation.args = invocation.inputArtifact === "h7Dual"
-                            ? (0, hardware_1.getOpenOcdMultiProgramArgs)([
-                                { core: "cm7", elfPath: refreshed.cm7ElfPath },
-                                { core: "cm4", elfPath: refreshed.cm4ElfPath },
-                            ], refreshed.architecture.family, refreshed.stlinkSerialNumber || undefined)
-                            : (0, hardware_1.getOpenOcdProgramArgs)(refreshedElf, refreshed.architecture.family, needsBothH755Targets(refreshed.architecture), invocation.core, refreshed.stlinkSerialNumber || undefined, (0, targetArchitecture_1.isKnownDualCoreH7Device)(refreshed.architecture.device));
-                    }
-                    else if (invocation.executable === objcopyPathForStatus(toolStatus)) {
-                        invocation.args[3] = refreshedElf;
-                        invocation.args[4] = refreshedBin;
+                    else if (invocation.inputArtifact === "elf") {
+                        const evidence = validateSelectedElf(refreshed, refreshedElf, invocation.core);
+                        if (!evidence.valid) {
+                            artifactValidationFailed = true;
+                            artifactValidationMessage = evidence.reason;
+                            recordOperation("artifactValidation", { status: "failed", command, message: evidence.reason, startedAt: operationStartedAt });
+                            throw new Error(`Flash arrêté : ${evidence.reason}`);
+                        }
+                        const snapshot = await (0, artifactValidation_1.snapshotFirmwareArtifact)(evidence, flashStagingDirectory, `${invocation.core || "stm32"}.elf`);
+                        if (!snapshot.valid) {
+                            artifactValidationFailed = true;
+                            artifactValidationMessage = snapshot.reason;
+                            recordOperation("artifactValidation", { status: "failed", command, message: snapshot.reason, startedAt: operationStartedAt });
+                            throw new Error(`Flash arrêté : ${snapshot.reason}`);
+                        }
+                        artifactEvidenceByPath.set(snapshot.artifactPath, snapshot);
+                        artifactValidationMessage = `${snapshot.targetName} (${snapshot.sizeBytes} octets, SHA-256 ${snapshot.sha256.slice(0, 12)}…)`;
+                        if (invocation.executable === toolStatus.openocdPath) {
+                            artifactValidationSucceeded = true;
+                            invocation.args = (0, hardware_1.getOpenOcdProgramArgs)(snapshot.artifactPath, refreshed.architecture.family, needsBothH755Targets(refreshed.architecture), invocation.core, refreshed.stlinkSerialNumber || undefined, (0, targetArchitecture_1.isKnownDualCoreH7Device)(refreshed.architecture.device));
+                        }
+                        else if (invocation.executable === objcopyPathForStatus(toolStatus)) {
+                            invocation.sourceArtifactPath = snapshot.artifactPath;
+                            invocation.args = ["-O", "binary", "-S", snapshot.artifactPath, invocation.outputArtifactPath || ""];
+                        }
                     }
                     else if (invocation.inputArtifact === "bin") {
-                        if (!fileExists(refreshedBin)) {
+                        const staged = invocation.sourceArtifactPath
+                            ? (0, artifactValidation_1.validateStagedBinary)(invocation.sourceArtifactPath, flashStagingDirectory)
+                            : { valid: false, reason: "BIN temporaire absent." };
+                        const original = staged.valid && staged.artifactPath ? artifactEvidenceByPath.get(staged.artifactPath) : undefined;
+                        if (!staged.valid || !original || staged.sha256 !== original.sha256) {
                             artifactValidationFailed = true;
-                            recordOperation("artifactValidation", { status: "failed", command, message: `BIN ${invocation.core?.toUpperCase() || "STM32"} absent après objcopy.`, startedAt: operationStartedAt });
-                            throw new Error(`BIN ${invocation.core?.toUpperCase() || "STM32"} introuvable après objcopy/build.`);
+                            artifactValidationMessage = staged.valid ? "Le BIN ne correspond plus à l'image convertie de l'ELF sélectionné." : staged.reason;
+                            recordOperation("artifactValidation", { status: "failed", command, message: artifactValidationMessage, startedAt: operationStartedAt });
+                            throw new Error(`Programmation refusée : ${artifactValidationMessage}`);
                         }
-                        const flashAddress = invocation.args.at(-1) || "0x08000000";
-                        invocation.args = (0, hardware_1.getStFlashWriteArgs)(refreshedBin, flashAddress, refreshed.stlinkSerialNumber || undefined);
+                        invocation.args = (0, hardware_1.getStFlashWriteArgs)(staged.artifactPath, invocation.flashAddress || "", refreshed.stlinkSerialNumber || undefined);
                     }
                 }
-                progressManager.setPhase(invocation.phase, invocation.label);
+                if (invocation.phase === "verifying" && invocation.inputArtifact === "readback") {
+                    const refreshed = getQc1Status(this.context);
+                    const expectedPath = invocation.sourceArtifactPath || "";
+                    const expectedEvidence = expectedPath ? (0, artifactValidation_1.validateStagedBinary)(expectedPath, flashStagingDirectory) : { valid: false, reason: "BIN attendu absent." };
+                    const recorded = expectedEvidence.valid && expectedEvidence.artifactPath ? artifactEvidenceByPath.get(expectedEvidence.artifactPath) : undefined;
+                    if (!expectedEvidence.valid || !expectedEvidence.artifactPath || !recorded || expectedEvidence.sha256 !== recorded.sha256) {
+                        readbackFailureMessage = expectedEvidence.valid ? "Le BIN à comparer a changé depuis sa conversion." : expectedEvidence.reason;
+                        recordOperation("verification", { status: "failed", command, message: readbackFailureMessage, completedAt: Date.now() });
+                        throw new Error(`Vérification Flash refusée : ${readbackFailureMessage}`);
+                    }
+                    if (invocation.outputArtifactPath)
+                        await fs.promises.rm(invocation.outputArtifactPath, { force: true });
+                    verificationProcessCount++;
+                    invocation.args = (0, hardware_1.getStFlashReadArgs)(invocation.outputArtifactPath || "", invocation.flashAddress || "", expectedEvidence.sizeBytes || 0, refreshed.stlinkSerialNumber || undefined);
+                    recordOperation("verification", { status: "running", command, message: invocation.label, startedAt: Date.now() });
+                }
+                if (invocation.phase === "resetting") {
+                    const refreshed = getQc1Status(this.context);
+                    invocation.args = (0, hardware_1.getStFlashResetArgs)(refreshed.stlinkSerialNumber || undefined);
+                    resetProcessCount++;
+                    recordOperation("reset", { status: "running", command, message: invocation.label, startedAt: Date.now() });
+                }
+                const progressPhase = invocation.phase === "verifying" || invocation.phase === "resetting" ? "flashing" : invocation.phase;
+                progressManager.setPhase(progressPhase, invocation.label);
                 const displayedInvocation = formatInvocation(invocation.executable, invocation.args);
                 executedCommands.push(displayedInvocation);
                 this.appendOutput(`$ ${displayedInvocation}`, "command");
@@ -2561,8 +2672,43 @@ class QC1PanelProvider {
                         progressManager.consumeOutput(chunk);
                     this.appendOutput(safeChunk, "stderr");
                 });
-                const programmerFailureFromOutput = isProgrammer ? (0, operationCoordinator_1.programmerOutputFailureReason)(result.stdout, result.stderr) : undefined;
-                const processOk = (0, processTools_1.processSucceeded)(result) && !programmerFailureFromOutput;
+                const backendCommand = isProgrammer ||
+                    (invocation.executable === toolStatus.stFlashPath && (invocation.phase === "verifying" || invocation.phase === "resetting"));
+                const programmerFailureFromOutput = backendCommand ? (0, operationCoordinator_1.programmerOutputFailureReason)(result.stdout, result.stderr) : undefined;
+                let artifactOutputFailure = "";
+                if ((0, processTools_1.processSucceeded)(result) && invocation.outputArtifactPath && invocation.executable === objcopyPathForStatus(toolStatus)) {
+                    const staged = (0, artifactValidation_1.validateStagedBinary)(invocation.outputArtifactPath, flashStagingDirectory);
+                    const sourceEvidence = invocation.sourceArtifactPath ? artifactEvidenceByPath.get(fs.realpathSync(invocation.sourceArtifactPath)) : undefined;
+                    if (!staged.valid || !sourceEvidence) {
+                        artifactOutputFailure = staged.valid ? "L'ELF source n'a pas de preuve CMake associée." : staged.reason;
+                        artifactValidationFailed = true;
+                        artifactValidationMessage = artifactOutputFailure;
+                    }
+                    else {
+                        const stagedEvidence = { ...staged, targetName: sourceEvidence.targetName };
+                        artifactEvidenceByPath.set(staged.artifactPath, stagedEvidence);
+                        artifactValidationSucceeded = true;
+                        artifactValidationMessage = `${sourceEvidence.targetName} → BIN temporaire (${staged.sizeBytes} octets, SHA-256 ${staged.sha256.slice(0, 12)}…)`;
+                    }
+                }
+                let readbackFailure = "";
+                if ((0, processTools_1.processSucceeded)(result) && invocation.phase === "verifying" && invocation.inputArtifact === "readback") {
+                    try {
+                        const expected = await fs.promises.readFile(invocation.sourceArtifactPath || "");
+                        const actual = await fs.promises.readFile(invocation.outputArtifactPath || "");
+                        const comparison = (0, artifactValidation_1.compareFirmwareReadback)(expected, actual);
+                        if (comparison.matches)
+                            successfulVerificationProcessCount++;
+                        else
+                            readbackFailure = comparison.reason;
+                    }
+                    catch (error) {
+                        readbackFailure = `Lecture de comparaison absente ou inaccessible : ${error instanceof Error ? error.message : String(error)}`;
+                    }
+                    if (readbackFailure)
+                        readbackFailureMessage = readbackFailure;
+                }
+                const processOk = (0, processTools_1.processSucceeded)(result) && !programmerFailureFromOutput && !artifactOutputFailure && !readbackFailure;
                 const buildFailureFromOutput = invocation.phase === "configuring" || invocation.phase === "building"
                     ? buildTextFailureMessage || (0, operationCoordinator_1.buildOutputFailureReason)(buildStdoutParts.join(""), buildStderrParts.join(""))
                     : undefined;
@@ -2572,11 +2718,19 @@ class QC1PanelProvider {
                 }
                 if (isProgrammer && processOk)
                     successfulProgrammerProcessCount++;
+                if (invocation.phase === "resetting" && processOk)
+                    successfulResetProcessCount++;
                 if (!processOk || buildFailureFromOutput) {
-                    const recognizedFailure = buildFailureFromOutput || programmerFailureFromOutput;
+                    const recognizedFailure = buildFailureFromOutput || programmerFailureFromOutput || artifactOutputFailure || readbackFailure;
                     failedResult = recognizedFailure && (0, processTools_1.processSucceeded)(result)
                         ? { ...result, error: new Error((0, probeSelection_1.redactStlinkSerials)(recognizedFailure)) }
                         : result;
+                    if (invocation.phase === "flashing" && invocation.executable === objcopyPathForStatus(toolStatus)) {
+                        artifactValidationFailed = true;
+                        artifactValidationMessage || (artifactValidationMessage = recognizedFailure || "Échec de génération du BIN temporaire.");
+                    }
+                    if (invocation.phase === "verifying")
+                        readbackFailureMessage || (readbackFailureMessage = recognizedFailure || result.stderr || "Lecture de comparaison échouée.");
                     failedInvocation = invocation;
                     return false;
                 }
@@ -2628,6 +2782,16 @@ class QC1PanelProvider {
                 timedOut: isTimeoutError(error)
             };
         }
+        finally {
+            if (flashStagingDirectory) {
+                try {
+                    await fs.promises.rm(flashStagingDirectory, { recursive: true, force: true });
+                }
+                catch (error) {
+                    this.appendOutput(`[QC1] Nettoyage du dossier temporaire de flash impossible: ${String(error)}`, "error");
+                }
+            }
+        }
         const stdoutText = stdoutParts.join("");
         const stderrText = stderrParts.join("");
         const fullOutput = `${stdoutText}\n${stderrText}`;
@@ -2666,24 +2830,38 @@ class QC1PanelProvider {
         }
         if (programmingRequested) {
             const programmingStatus = programmerProcessCount === 0 ? "skipped" :
-                successfulProgrammerProcessCount === programmerProcessCount && !failedResult ? "success" : "failed";
+                successfulProgrammerProcessCount === programmerProcessCount ? "success" : "failed";
             const programmingMessage = programmingStatus === "success"
                 ? "Processus OpenOCD/st-flash terminé sans erreur détectée."
                 : programmingStatus === "failed"
-                    ? operationFailureMessage || failedResult?.stderr || "Le processus de programmation a échoué."
+                    ? operationFailureMessage || (failedResult?.error instanceof Error ? failedResult.error.message : failedResult?.stderr) || "Le processus de programmation a échoué."
                     : `Programmation non lancée${operationFailureMessage ? ` : ${operationFailureMessage}` : buildOperationStatus !== "success" ? " : le build n'a pas abouti" : ""}.`;
             const allProgrammersVerified = programmerVerificationRequests.length > 0 && programmerVerificationRequests.every(Boolean);
             const allProgrammersRequestedReset = programmerResetRequests.length > 0 && programmerResetRequests.every(Boolean);
-            const verificationStatus = programmerProcessCount === 0 ? "skipped" :
-                successfulProgrammerProcessCount === programmerProcessCount && allProgrammersVerified ? "success" : "unknown";
-            const resetStatus = programmerProcessCount === 0 ? "skipped" :
-                successfulProgrammerProcessCount === programmerProcessCount && allProgrammersRequestedReset ? "success" : "unknown";
+            const verificationStatus = verificationProcessCount > 0
+                ? successfulVerificationProcessCount === verificationProcessCount ? "success" : "failed"
+                : openOcdProgrammerUsed && allProgrammersVerified
+                    ? programmerProcessCount > 0 && successfulProgrammerProcessCount === programmerProcessCount ? "success" : "unknown"
+                    : programmerProcessCount === 0 ? "skipped" : "unknown";
+            const resetStatus = resetProcessCount > 0
+                ? successfulResetProcessCount === resetProcessCount ? "success" : "failed"
+                : openOcdProgrammerUsed
+                    ? allProgrammersRequestedReset
+                        ? programmerProcessCount > 0 && successfulProgrammerProcessCount === programmerProcessCount ? "success" : "unknown"
+                        : "unknown"
+                    : "skipped";
             const verificationMessage = verificationStatus === "success"
-                ? "OpenOCD verify s'est terminé sans erreur détectée."
-                : verificationStatus === "unknown" ? "Aucune preuve suffisante de vérification indépendante." : "Vérification non lancée.";
+                ? verificationProcessCount > 0
+                    ? `Lecture indépendante comparée octet par octet (${successfulVerificationProcessCount} image(s)).`
+                    : "OpenOCD verify s'est terminé sans erreur détectée."
+                : verificationStatus === "failed" ? readbackFailureMessage || "Lecture ou comparaison Flash échouée."
+                    : verificationStatus === "unknown" ? "La séquence OpenOCD s'est interrompue avant de confirmer séparément verify." : "Vérification non lancée.";
             const resetMessage = resetStatus === "success"
-                ? "La commande de reset a été acceptée par le backend; le reset physique n'est pas observé."
-                : resetStatus === "unknown" ? "L'acceptation du reset n'est pas confirmée séparément." : "Reset non lancé.";
+                ? resetProcessCount > 0
+                    ? "st-flash reset a terminé sans erreur détectée; write peut aussi avoir déclenché un reset; NRST effectif et démarrage non observés."
+                    : "OpenOCD reset run a terminé sans erreur détectée; NRST effectif et démarrage non observés."
+                : resetStatus === "failed" ? "La commande st-flash reset a échoué."
+                    : resetStatus === "unknown" ? "La séquence OpenOCD s'est interrompue avant de confirmer reset." : "Reset non lancé.";
             recordOperation("programming", {
                 status: programmingStatus,
                 command,
@@ -2696,11 +2874,11 @@ class QC1PanelProvider {
             recordOperation("reset", { status: resetStatus, command, message: resetMessage, completedAt: operationCompletedAt });
             recordOperation("artifactValidation", {
                 ...operationSnapshot.operations.artifactValidation,
-                status: artifactValidationFailed ? "failed" : artifactValidationAttempted ? "unknown" : "skipped",
+                status: artifactValidationFailed ? "failed" : artifactValidationSucceeded ? "success" : artifactValidationAttempted ? "unknown" : "skipped",
                 message: artifactValidationFailed
-                    ? operationSnapshot.operations.artifactValidation.message || "Artefact requis absent."
+                    ? artifactValidationMessage || operationSnapshot.operations.artifactValidation.message || "Artefact requis absent."
                     : artifactValidationAttempted
-                        ? "Fichier présent; provenance et fraîcheur non vérifiées."
+                        ? artifactValidationSucceeded ? artifactValidationMessage : "Aucune preuve complète de provenance d'artefact."
                         : "Validation non lancée.",
                 completedAt: operationCompletedAt,
             });

@@ -102,8 +102,22 @@ export function getOpenOcdMultiProgramArgs(
 
 export function getStFlashWriteArgs(binPath: string, address = "0x08000000", serialNumber?: string): string[] {
   if (!/^0x[0-9a-f]+$/i.test(address)) throw new Error("Adresse de flash invalide.");
+  if (!binPath || /[\r\n\u0000]/.test(binPath)) throw new Error("Chemin BIN invalide.");
   if (serialNumber && !isValidStlinkSerial(serialNumber)) throw new Error("Numéro de série ST-Link invalide.");
-  return [...(serialNumber ? ["--serial", serialNumber] : []), "--reset", "write", binPath, address];
+  return [...(serialNumber ? ["--serial", serialNumber] : []), "write", binPath, address];
+}
+
+export function getStFlashReadArgs(readbackPath: string, address: string, sizeBytes: number, serialNumber?: string): string[] {
+  if (!/^0x[0-9a-f]+$/i.test(address)) throw new Error("Adresse de lecture Flash invalide.");
+  if (!readbackPath || /[\r\n\u0000]/.test(readbackPath)) throw new Error("Chemin de lecture Flash invalide.");
+  if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) throw new Error("Taille de lecture Flash invalide.");
+  if (serialNumber && !isValidStlinkSerial(serialNumber)) throw new Error("Numéro de série ST-Link invalide.");
+  return [...(serialNumber ? ["--serial", serialNumber] : []), "read", readbackPath, address, `0x${sizeBytes.toString(16)}`];
+}
+
+export function getStFlashResetArgs(serialNumber?: string): string[] {
+  if (serialNumber && !isValidStlinkSerial(serialNumber)) throw new Error("Numéro de série ST-Link invalide.");
+  return [...(serialNumber ? ["--serial", serialNumber] : []), "reset"];
 }
 
 /** Extract the first FLASH/ROM origin from a CubeMX linker script for BIN fallback only. */

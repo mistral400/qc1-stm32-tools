@@ -23,12 +23,16 @@ Le numéro de série est transmis à OpenOCD par `adapter serial` et à `st-flas
 
 | Cible/backend | Artefact et comportement |
 | --- | --- |
-| STM32F1 + OpenOCD | ELF avec `program`, `verify`, `reset`, `exit` et target STM32F1 |
-| STM32F1 + st-flash | Conversion ELF → BIN par `objcopy`, adresse issue du linker; `st-flash --reset write`. QC1 ne lance pas une commande de vérification distincte dans ce fallback. |
+| STM32F1 + OpenOCD | ELF de la cible CMake active, validé puis passé à `program`, `verify`, `reset`, `exit` avec le target STM32F1 |
+| STM32F1 + st-flash | ELF de la cible CMake active validé, conversion fraîche par `objcopy` dans un dossier temporaire isolé, `write`, `read` de même adresse/taille et comparaison exacte, puis commande `reset` séparée |
 | H7 dual-core + OpenOCD | Un ELF par cœur; `cpu0` CM7 / `cpu1` CM4, `DUAL_CORE` et `DUAL_BANK`; le flash all programme et vérifie les deux ELF puis ne demande le reset qu'après le second. |
 | H7 dual-core + st-flash | Non pris en charge par QC1 : il ne sélectionne pas CM7/CM4 avec le backend actuel. |
 
-Un reset survient seulement dans le flash explicitement demandé. Le précontrôle sonde/cible est en lecture seule (`init; targets; shutdown`) et n'exécute ni programmation, ni effacement, ni halt/reset.
+La validation de l'ELF exige une cible exécutable CMake unique, un artefact non vide dans le projet/dossier de build, une association de cœur non ambiguë lorsqu'elle s'applique, ainsi qu'une empreinte capturée. QC1 programme une copie ELF privée et vérifie que son empreinte correspond à l'artefact validé. Le fallback `st-flash` refuse les anciens BIN du dossier de build : il exige `objcopy` et compare le BIN temporaire à sa lecture Flash avant de demander un reset. L'absence de BIN, une lecture de taille différente, une comparaison différente ou une erreur textuelle reconnue arrête la séquence et empêche le reset explicite suivant.
+
+L'indication Flash pleinement réussie requiert validation d'artefact, écriture, vérification et commande de reset acceptées sans erreur détectée. Pour OpenOCD, `verify` et `reset run` font partie de la commande intégrée; pour st-flash, la lecture/comparaison et `reset` sont des processus distincts. Cela ne prouve ni l'impulsion physique sur NRST, ni le démarrage ou le fonctionnement du firmware. Le précontrôle sonde/cible reste en lecture seule (`init; targets; shutdown`) et n'exécute ni programmation, ni effacement, ni halt/reset.
+
+**Limite st-flash :** la documentation de stlink v1.8.0 indique que `st-flash write` déclenche déjà un reset sur NRST par défaut; `--reset` en demande deux. QC1 n'ajoute pas `--reset`, mais conserve une commande `st-flash reset` distincte après la vérification. Le fallback peut donc provoquer un reset à l'écriture puis un autre après la lecture comparée. Si NRST n'est pas câblé, stlink documente un reset logiciel de repli; le retour CLI ne permet pas à QC1 de distinguer le chemin physique utilisé. Pour une séquence strictement « vérifier puis un seul reset », utiliser le backend et la configuration dont ce comportement a été confirmé sur la carte. [Manpage st-flash v1.8.0](https://github.com/stlink-org/stlink/blob/v1.8.0/doc/man/st-flash.md), [guide stlink v1.8.0](https://github.com/stlink-org/stlink/blob/v1.8.0/doc/tutorial.md#d-understanding-hardware-and-software-reset-functionality-for-st-flash-and-reset-related-device-recovery).
 
 La vérification OpenOCD confirme au mieux la famille STM32H7, pas la référence exacte du MCU, la carte, le câblage ou la validité électrique. Pour une première carte ou une nouvelle image, vérifie la référence sur la carte et inspecte les deux scripts de linker avant de flasher.
 

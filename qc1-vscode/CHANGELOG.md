@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.2 - 2026-11-04
+
+- Validate the selected ELF against one executable CMake target, active project/build scope and target core, and record its size and SHA-256 evidence.
+- Program only a private ELF snapshot whose size and SHA-256 still match the validated build artifact at copy time.
+- Refuse stale build-directory BIN fallback; require a fresh `objcopy` image in a unique temporary directory for `st-flash`.
+- Verify `st-flash` writes with an independent read and exact byte comparison, then issue a separate reset command.
+- Require artifact validation, programming, verification and an accepted reset command before reporting Flash as fully successful; do not claim physical reset or firmware startup.
+- Document the `st-flash` v1.8.0 write-side reset behavior and report that its later explicit reset may be a second reset.
+- Add regression tests for ELF ownership/snapshot integrity, staged BIN scope, readback comparison, missing `objcopy`, programmer output errors, and stage order.
+- Local tests, typecheck, lint, VS Code 1.144.1 activation smoke and VSIX packaging passed. No hardware or remote CI validation was performed.
+
 ## 0.4.1 - 2026-11-04
 
 - Track Build, artifact validation, programming, verification, reset, Debug session and firmware execution as separate results.

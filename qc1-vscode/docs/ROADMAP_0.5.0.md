@@ -42,7 +42,7 @@ Les deux tests ignorés nécessitent `QC1_CUBE_H7_PATH` (installation locale STM
 
 ## État de travail
 
-Inspection et baseline terminées. Jalon actif : **0.4.1 — séparation et attribution des résultats Build/Flash/Debug**.
+Inspection et baseline terminées. Jalon 0.4.1 validé et checkpointé localement. Jalon actif : **0.4.2 — provenance des artefacts, vérification indépendante et reset séparé**.
 
 ### Tranche de code en cours — 0.4.1
 
@@ -54,3 +54,14 @@ Inspection et baseline terminées. Jalon actif : **0.4.1 — séparation et attr
 - Activation smoke en VS Code 1.144.1/macOS arm64 : PASS, extension activée et commandes publiques vérifiées. Le test a utilisé un lanceur et un profil temporaires dans `/tmp`; aucune commande matérielle n'a été invoquée.
 - Packaging 0.4.1 : PASS, `qc1-vscode/qc1-stm32-tools-0.4.1.vsix` (101 fichiers, 336,78 KB); `unzip -t` confirme l'intégrité de l'archive.
 - Aucun test CI distant ni test matériel n'a été effectué. La tranche est localement validée; tag/commit de jalon à enregistrer avant de poursuivre.
+
+### Tranche de code en cours — 0.4.2
+
+- `src/qc1/artifactValidation.ts` vérifie l'ELF associé à une cible CMake exécutable unique, son périmètre projet/build, sa taille et son empreinte SHA-256; les backends reçoivent un snapshot privé vérifié. Le module valide aussi le BIN temporaire et compare les octets lus après programmation.
+- OpenOCD reçoit l'ELF validé avec sa séquence `program … verify reset exit`. Le fallback st-flash produit un BIN neuf dans un répertoire temporaire, écrit, relit la plage exacte, compare le résultat puis demande un reset distinct. Tout échec arrête les étapes suivantes; aucun ancien BIN n'est utilisé.
+- Le dashboard marque Flash pleinement réussi uniquement après validation d'artefact, programmation, vérification et reset acceptés. Le message précise que NRST effectif et démarrage du firmware ne sont pas observés.
+- Pour le fallback st-flash v1.8.0, documenter le reset déclenché par `write` sans `--reset`, puis la commande distincte après comparaison; signaler que NRST/software reset effectif n'est pas déductible du seul retour CLI.
+- Tests locaux : `npm test` PASS (158, 2 ignorés, 160 total), `npm run typecheck` PASS, `npm run lint` PASS, `git diff --check` PASS. Deux tests H7 restent ignorés pour les dépendances locales documentées plus haut.
+- VS Code 1.144.1 / macOS arm64, fenêtre sans workspace : activation et commandes publiques PASS (1 test), aucune commande matérielle appelée.
+- Packaging 0.4.2 PASS : `qc1-stm32-tools-0.4.2.vsix` (103 fichiers); intégrité ZIP et version du manifeste vérifiées après ajout du snapshot ELF.
+- Aucun test matériel ni CI distante. Le jalon est validé par les contrôles logiciels; checkpoint local avant la tranche 0.4.3 — ressources et conflits.
