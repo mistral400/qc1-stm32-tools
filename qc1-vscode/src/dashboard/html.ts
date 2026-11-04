@@ -7,8 +7,14 @@ export function escapeHtml(value: unknown): string {
 export function row(label: string, value: unknown): string {
   return `<div class="row"><span class="muted">${escapeHtml(label)}</span><span class="value">${escapeHtml(value || "—")}</span></div>`;
 }
-export function action(type: string, label: string, data = "", disabled = false): string {
-  return `<button data-action="${escapeHtml(type)}" ${data} ${disabled ? "disabled" : ""}>${escapeHtml(label)}</button>`;
+export function action(
+  type: string,
+  label: string,
+  data = "",
+  disabled = false,
+  variant: "primary" | "secondary" | "quiet" = "secondary",
+): string {
+  return `<button type="button" class="action-${variant}" data-action="${escapeHtml(type)}" ${data} ${disabled ? "disabled" : ""}>${escapeHtml(label)}</button>`;
 }
 export function pathData(value: string): string { return `data-path="${escapeHtml(value)}"`; }
 export function compactPath(value: string, maxLength = 65): string {

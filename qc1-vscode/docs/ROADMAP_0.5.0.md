@@ -43,7 +43,7 @@ Les deux tests ignorés nécessitent `QC1_CUBE_H7_PATH` (installation locale STM
 
 ## État de travail
 
-Inspection et baseline terminées. Jalons 0.4.1, 0.4.2 et 0.4.3 validés et checkpointés localement; 0.4.4 est validé par les contrôles logiciels locaux. Prochain jalon : **0.4.5 — modernisation du Webview**.
+Inspection et baseline terminées. Jalons 0.4.1 à 0.4.4 sont validés et checkpointés. Le jalon 0.4.5 est implémenté et validé par les contrôles logiciels et le smoke VS Code; inspection visuelle du rendu et validation multiplateforme non effectuées. Prochain jalon : **0.4.6 — navigation hybride VS Code / Webview**.
 
 ### Jalon validé et checkpointé localement — 0.4.1
 
@@ -86,3 +86,14 @@ Inspection et baseline terminées. Jalons 0.4.1, 0.4.2 et 0.4.3 validés et chec
 - Validation : `npm test` PASS (169, 2 ignorés, 171 total), `npm run typecheck` PASS, `npm run lint` PASS, `git diff --check` PASS.
 - VS Code 1.144.1 / macOS arm64, fenêtre sans workspace : activation/commandes publiques PASS (1 test).
 - Packaging local PASS : `qc1-stm32-tools-0.4.4.vsix` (107 fichiers), ZIP valide et manifeste version 0.4.4 confirmé. Aucun test matériel ni CI distante.
+
+### Jalon 0.4.5 — modernisation du Webview
+
+- Navigation compacte : libellés courts jusqu'à 600 px, noms complets sur les fenêtres larges, relations ARIA et navigation clavier avec flèches, Home et End.
+- Styles fondés sur les tokens de thème VS Code, cartes et actions hiérarchisées, prise en charge du contraste forcé et du mouvement réduit.
+- Build principal visible; Flash/Debug secondaires; entretien et commandes par cœur dual-core sous Actions avancées. Les commandes Flash/Debug d'une cible H7 mono-cœur restent visibles. Aucune commande n'est supprimée; Build, validation d'artefact, programmation, vérification et reset restent séparés.
+- Tests UI ajoutés pour les cinq onglets, les commandes STM32F1/H7, les états d'opération et les points de rupture responsive.
+- Validation logicielle : `npm test` PASS (175 réussis, 2 ignorés, 177 total), `npm run typecheck` PASS, `npm run lint` PASS, `git diff --check` PASS.
+- VS Code 1.144.1 / macOS arm64, fenêtre sans workspace : activation et commandes publiques PASS (1 test). Le rendu à 320/400/600 px, le zoom 200 %, les autres OS et les thèmes ne sont pas inspectés visuellement.
+- Packaging local PASS : `qc1-stm32-tools-0.4.5.vsix` (107 fichiers, environ 361 KB); intégrité ZIP et version 0.4.5 du manifeste confirmées. Le checkpoint Git local est créé après validation.
+- Aucun test matériel ni CI distante; inspection visuelle et validation sur Windows/Linux restent à faire.

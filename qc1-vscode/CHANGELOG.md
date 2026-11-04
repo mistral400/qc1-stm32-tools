@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.5 - 2026-11-04
+
+- Compact the five dashboard routes through 600 px and add labelled, keyboard-operable tab navigation.
+- Apply VS Code theme variables, clearer cards and action hierarchy, reduced-motion support, and forced-colors styling.
+- Keep build, artifact validation, programming, verification and reset results visible as separate, status-colored rows.
+- Group maintenance and dual-core per-core commands under advanced actions; keep single-core flash/debug actions visible and preserve all command IDs.
+- Add dashboard UI regression tests for navigation, F1/H7 actions, independent operation states and theme breakpoints.
+- Visual checks at multiple widths and on Windows/Linux remain unperformed; no hardware operations are part of this milestone.
+
 ## 0.4.4 - 2026-11-04
 
 - Add per-project OpenOCD reset profiles: backend default, SYSRESETREQ, hardware NRST, and connect-under-reset.

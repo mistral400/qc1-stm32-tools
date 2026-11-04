@@ -6,11 +6,28 @@ let settingsDirty = false;
 function text(id, value) { const node=document.getElementById(id); if(node) node.textContent=String(value ?? '—'); }
 function route(id) {
   if(!routes.includes(id)) return;
-  document.querySelectorAll('.panel').forEach(node=>node.classList.toggle('active',node.id===id));
-  document.querySelectorAll('[data-panel]').forEach(node=>node.setAttribute('aria-selected',String(node.dataset.panel===id)));
+  document.querySelectorAll('.panel').forEach(node=>{
+    const selected=node.id===id;
+    node.hidden=!selected;node.setAttribute('aria-hidden',String(!selected));node.classList.toggle('active',selected);
+  });
+  document.querySelectorAll('[role=tab][data-panel]').forEach(node=>{
+    const selected=node.dataset.panel===id;
+    node.setAttribute('aria-selected',String(selected));node.tabIndex=selected?0:-1;
+  });
   vscode.setState({...vscode.getState(),activePanel:id});
 }
 route(vscode.getState()?.activePanel || 'projectPanel');
+document.querySelector('[role=tablist]').addEventListener('keydown',event=>{
+  const tabs=[...document.querySelectorAll('[role=tab][data-panel]')];
+  const current=tabs.indexOf(document.activeElement);if(current<0) return;
+  let next=current;
+  if(event.key==='ArrowRight') next=(current+1)%tabs.length;
+  else if(event.key==='ArrowLeft') next=(current+tabs.length-1)%tabs.length;
+  else if(event.key==='Home') next=0;
+  else if(event.key==='End') next=tabs.length-1;
+  else return;
+  event.preventDefault();tabs[next].focus();route(tabs[next].dataset.panel);
+});
 document.addEventListener('input',event=>{if(event.target.closest('#projectSettingsForm')) settingsDirty=true;});
 document.addEventListener('click',event=>{
   const button=event.target.closest('button'); if(!button || button.disabled) return;
