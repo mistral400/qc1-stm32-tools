@@ -1,5 +1,6 @@
 import type { ProjectSettingsInput } from "../qc1/projectConfiguration";
 import { validateResetProfile } from "../qc1/resetConfiguration";
+import type { SerialConnectionOptions, SerialDisplayMode } from "../qc1/serialMonitor";
 
 export const qc1Commands = [
   "build", "clean", "rebuild", "tsmake", "flash", "debug", "build-cm7", "build-cm4",
@@ -10,6 +11,7 @@ const simpleActions = [
   "clear", "copyOutput", "saveLog", "createDiagnosticReport", "settings", "refreshSettings",
   "refreshTools", "autoDetectPaths", "discoverProjects", "rescanProjects", "cancelProjectScan",
   "chooseProjectFolder", "copyDiagnostic", "openExtensionFolder", "openProjectFolder", "detectStlink", "selectStlink", "openSerial", "startOpenOcd",
+  "serialRefresh", "serialDisconnect", "serialClear", "serialSaveLog", "clearOperationHistory",
 ] as const;
 export type WebviewMessage =
   | { type: "command" | "run" | "terminal"; command: Qc1Command }
@@ -17,7 +19,11 @@ export type WebviewMessage =
   | { type: "useProject" | "useRecentProject" | "removeRecentProject"; projectPath: string }
   | ({ type: "updateProjectSettings" } & ProjectSettingsInput)
   | { type: "openArtifact"; id: string }
-  | { type: "openDiagnosticFile"; index: number };
+  | { type: "openDiagnosticFile"; index: number }
+  | { type: "serialConnect"; options: SerialConnectionOptions }
+  | { type: "serialSend"; text: string; mode: SerialDisplayMode; appendNewline: boolean }
+  | { type: "serialDisplay"; mode: SerialDisplayMode; timestamps: boolean }
+  | { type: "serialGraphControl"; action: "pause" | "resume" | "clear" | "exportCsv" };
 
 /** Validate the bridge at runtime; project content cannot invent commands or paths. */
 export function parseWebviewMessage(value: unknown): WebviewMessage | undefined {
@@ -35,6 +41,38 @@ export function parseWebviewMessage(value: unknown): WebviewMessage | undefined 
   if (input.type === "openArtifact" && typeof input.id === "string") return { type: "openArtifact", id: input.id };
   if (input.type === "openDiagnosticFile" && Number.isInteger(input.index) && Number(input.index) >= 0)
     return { type: "openDiagnosticFile", index: Number(input.index) };
+  if (input.type === "serialConnect") {
+    const options = input.options;
+    if (!options || typeof options !== "object" || Array.isArray(options)) return;
+    const value = options as Record<string, unknown>;
+    if (typeof value.path !== "string" || !value.path.trim() || value.path.length > 4096 ||
+      typeof value.baudRate !== "number" || !Number.isInteger(value.baudRate) || value.baudRate < 50 || value.baudRate > 4_000_000 ||
+      typeof value.dataBits !== "number" || ![5, 6, 7, 8].includes(value.dataBits) ||
+      typeof value.parity !== "string" || !["none", "even", "odd", "mark", "space"].includes(value.parity) ||
+      typeof value.stopBits !== "number" || ![1, 2].includes(value.stopBits)) return;
+    for (const key of ["rtscts", "xon", "xoff", "xany"])
+      if (value[key] !== undefined && typeof value[key] !== "boolean") return;
+    return {
+      type: "serialConnect",
+      options: {
+        path: value.path, baudRate: value.baudRate, dataBits: value.dataBits as SerialConnectionOptions["dataBits"],
+        parity: value.parity as SerialConnectionOptions["parity"], stopBits: value.stopBits as SerialConnectionOptions["stopBits"],
+        rtscts: value.rtscts as boolean | undefined, xon: value.xon as boolean | undefined,
+        xoff: value.xoff as boolean | undefined, xany: value.xany as boolean | undefined,
+      },
+    };
+  }
+  if (input.type === "serialSend") {
+    if (typeof input.text !== "string" || input.text.length > 12_300 ||
+      (input.mode !== "ascii" && input.mode !== "hex") || typeof input.appendNewline !== "boolean") return;
+    return { type: "serialSend", text: input.text, mode: input.mode, appendNewline: input.appendNewline };
+  }
+  if (input.type === "serialDisplay") {
+    if ((input.mode !== "ascii" && input.mode !== "hex") || typeof input.timestamps !== "boolean") return;
+    return { type: "serialDisplay", mode: input.mode as SerialDisplayMode, timestamps: input.timestamps };
+  }
+  if (input.type === "serialGraphControl" && ["pause", "resume", "clear", "exportCsv"].includes(String(input.action)))
+    return { type: "serialGraphControl", action: input.action as "pause" | "resume" | "clear" | "exportCsv" };
   if (input.type === "updateProjectSettings") {
     if (typeof input.projectPath !== "string" || typeof input.buildType !== "string" || typeof input.cmakePreset !== "string") return;
     const result: ProjectSettingsInput = { projectPath: input.projectPath, buildType: input.buildType, cmakePreset: input.cmakePreset };

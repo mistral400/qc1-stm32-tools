@@ -51,6 +51,7 @@ exports.defaultDashboardState = {
     tools: [],
     diagnostics: [],
     artifacts: [],
+    operationHistory: [],
     hardwareSessions: [],
     currentAction: "Idle",
     projectName: "--",
@@ -139,7 +140,9 @@ exports.defaultDashboardState = {
         stFlashInstalled: false,
         stlinkProbeStatus: "non testé",
         stlinkSelectedProbe: "Non sélectionnée",
-        cmakeDetected: false
+        cmakeDetected: false,
+        serialPort: "",
+        baudRate: 19200
     },
     projectDiscovery: {
         status: "idle",

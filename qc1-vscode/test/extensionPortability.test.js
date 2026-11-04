@@ -86,6 +86,10 @@ test("extension integration: multi-root, native validation, report and CMake arg
   } = require("../out/extension");
   const context = {
     extensionPath: path.resolve(__dirname, ".."),
+    globalState: {
+      get: (_key, fallback) => fallback,
+      update: async () => undefined,
+    },
     extension: {
       packageJSON: {
         publisher: "Mistral400",

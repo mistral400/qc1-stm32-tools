@@ -35,6 +35,7 @@ document.addEventListener('click',event=>{
   const type=button.dataset.action; if(!type) return;
   if(type==='refreshSettings') settingsDirty=false;
   const message={type};
+  if(type==='serialGraphControl') message.action=button.dataset.graphAction;
   if(button.dataset.command) message.command=button.dataset.command;
   if(button.dataset.path) message.projectPath=button.dataset.path;
   if(button.dataset.id) message.id=button.dataset.id;
@@ -57,7 +58,10 @@ function renderViews(views) {
   if(!views || typeof views!=='object') return;
   // Only host-rendered, escaped markup is accepted, in fixed non-script containers.
   for(const id of ['projectContent','buildContent','toolsContent','diagnosticsContent']) {
-    const node=document.getElementById(id); if(node && typeof views[id]==='string') node.innerHTML=views[id];
+    const node=document.getElementById(id); if(node && typeof views[id]==='string') {
+      node.innerHTML=views[id];
+      if(id==='toolsContent'&&serialUiState) {serialState(serialUiState);renderSerialOutput();}
+    }
   }
 }
 function progress(p) {
@@ -81,6 +85,83 @@ function settings(config) {
   document.getElementById('autoDiscoverProjectsInput').checked=Boolean(config.autoDiscoverProjects);
   document.getElementById('discoveryRootsInput').value=(config.discoveryRoots||[]).join('\\n');
 }
+let serialUiLines=[];
+let serialUiState;
+const serialPalette=['var(--vscode-charts-blue, #3794ff)','var(--vscode-charts-green, #89d185)','var(--vscode-charts-orange, #d18616)','var(--vscode-charts-purple, #b180d7)','var(--vscode-charts-red, #f14c4c)','var(--vscode-charts-yellow, #cca700)','var(--vscode-charts-foreground, #cccccc)','var(--vscode-focusBorder, #007fd4)'];
+function renderSerialOutput() {
+  const node=document.getElementById('serialOutput');if(!node)return;
+  const mode=document.getElementById('serialDisplayMode')?.value||'ascii';
+  const timestamps=Boolean(document.getElementById('serialTimestamps')?.checked);
+  node.textContent=serialUiLines.map(line=>(timestamps?'['+line.time+'] ':'')+line.direction+' '+(mode==='hex'?line.hex:line.ascii)).join('\\n')||'En attente de données UART.';
+  node.scrollTop=node.scrollHeight;
+}
+function renderSerialGraph(graph,paused) {
+  const svg=document.getElementById('serialGraph');const legend=document.getElementById('serialGraphLegend');if(!svg||!legend)return;
+  svg.replaceChildren();legend.replaceChildren();
+  const samples=Array.isArray(graph?.samples)?graph.samples.slice(-500):[];
+  const series=Array.isArray(graph?.series)?graph.series.slice(0,8):[];
+  const ns='http://www.w3.org/2000/svg';
+  series.forEach((name,seriesIndex)=>{
+    const points=samples.map((sample,index)=>({index,timeMs:sample?.timeMs,value:sample?.values?.[name]})).filter(point=>Number.isFinite(point.value)&&Number.isFinite(point.timeMs));
+    if(!points.length)return;
+    const values=points.map(point=>point.value);const minimum=Math.min(...values);const maximum=Math.max(...values);const range=maximum-minimum||1;
+    const minimumTime=Math.min(...points.map(point=>point.timeMs));const maximumTime=Math.max(...points.map(point=>point.timeMs));const timeRange=maximumTime-minimumTime;
+    const polyline=document.createElementNS(ns,'polyline');polyline.setAttribute('fill','none');polyline.setAttribute('stroke',serialPalette[seriesIndex]);polyline.setAttribute('stroke-width','2');
+    polyline.setAttribute('points',points.map(point=>{const x=24+((timeRange>0?(point.timeMs-minimumTime)/timeRange:point.index/Math.max(1,points.length-1)))*566;const y=164-((point.value-minimum)/range)*144;return x.toFixed(1)+','+y.toFixed(1);}).join(' '));
+    svg.appendChild(polyline);
+    const item=document.createElement('span');item.className='serial-legend-item';
+    const swatch=document.createElement('span');swatch.className='serial-legend-swatch';swatch.style.setProperty('--series-color',serialPalette[seriesIndex]);
+    const label=document.createElement('span');label.textContent=name+' ('+minimum.toPrecision(4)+'…'+maximum.toPrecision(4)+')';
+    item.append(swatch,label);legend.appendChild(item);
+  });
+  text('serialGraphStatus',samples.length+' échantillons · '+series.length+' variables'+(paused?' · pause':''));
+}
+function serialState(state) {
+  if(!state||typeof state!=='object')return;
+  serialUiState=state;
+  const select=document.getElementById('serialPortSelect');
+  if(select&&Array.isArray(state.ports)) {
+    const previous=select.value;select.textContent='';
+    state.ports.forEach(port=>{if(!port||typeof port.path!=='string')return;const option=document.createElement('option');option.value=port.path;option.textContent=port.path+(port.manufacturer?' · '+port.manufacturer:'');select.appendChild(option);});
+    const selected=state.selectedPort||previous;
+    if(selected&&!state.ports.some(port=>port.path===selected)){const option=document.createElement('option');option.value=selected;option.textContent=selected+' · configuré';select.appendChild(option);}
+    if(selected)select.value=selected;
+  }
+  for(const [key,id] of [['baudRate','serialBaudRate'],['dataBits','serialDataBits'],['parity','serialParity'],['stopBits','serialStopBits']]) {
+    const node=document.getElementById(id);if(node&&state[key]!==undefined&&document.activeElement!==node)node.value=String(state[key]);
+  }
+  const rtscts=document.getElementById('serialRtsCts');if(rtscts&&document.activeElement!==rtscts)rtscts.checked=Boolean(state.rtscts);
+  const mode=document.getElementById('serialDisplayMode');if(mode)mode.value=state.displayMode||'ascii';
+  const timestamps=document.getElementById('serialTimestamps');if(timestamps)timestamps.checked=Boolean(state.timestamps);
+  text('serialStatus',state.status==='connected'?'Connecté à '+(state.selectedPort||'port série'):state.status==='connecting'?'Connexion en cours…':state.status==='error'?'Erreur UART':'Déconnecté · '+(state.rxBytes||0)+' octets reçus');
+  const error=document.getElementById('serialError');
+  if(error){
+    error.textContent='';error.hidden=!state.error;
+    if(state.error){const message=document.createElement('span');message.textContent=state.error;error.appendChild(message);}
+    (state.guidance||[]).forEach(item=>{
+      const details=document.createElement('details');details.className='guided-solution';
+      const summary=document.createElement('summary');summary.textContent=item.title;details.appendChild(summary);
+      const list=document.createElement('ol');(item.steps||[]).forEach(step=>{const entry=document.createElement('li');entry.textContent=step;list.appendChild(entry);});
+      details.appendChild(list);error.appendChild(details);
+    });
+  }
+  text('serialCounters','RX '+(state.rxBytes||0)+' octets · TX '+(state.txBytes||0)+' octets'+(state.droppedLines?' · '+state.droppedLines+' fragments UART omis':''));
+  const connected=Boolean(state.connected);const connecting=state.status==='connecting';
+  const connect=document.getElementById('serialConnectButton');if(connect)connect.disabled=connected||connecting;
+  const disconnect=document.getElementById('serialDisconnectButton');if(disconnect){disconnect.disabled=!connected&&!connecting;disconnect.textContent=connecting?'Annuler la connexion':'Déconnecter';}
+  const send=document.getElementById('serialSendButton');if(send)send.disabled=!connected;
+  document.querySelectorAll('[data-graph-action="pause"]').forEach(node=>node.disabled=!connected||Boolean(state.graphPaused));
+  document.querySelectorAll('[data-graph-action="resume"]').forEach(node=>node.disabled=!connected||!state.graphPaused);
+  document.querySelectorAll('[data-graph-action="clear"],[data-graph-action="exportCsv"]').forEach(node=>node.disabled=!Array.isArray(state.graph?.samples)||state.graph.samples.length===0);
+  if(Array.isArray(state.lines)){serialUiLines=state.lines.slice(-500);renderSerialOutput();}
+  if(state.graph)renderSerialGraph(state.graph,state.graphPaused);
+}
+function appendSerialLines(lines) {
+  if(!Array.isArray(lines))return;
+  serialUiLines.push(...lines.filter(line=>line&&typeof line.ascii==='string'&&typeof line.hex==='string').slice(-500));
+  if(serialUiLines.length>500)serialUiLines.splice(0,serialUiLines.length-500);
+  renderSerialOutput();
+}
 window.addEventListener('message',event=>{
   const msg=event.data;if(!msg || typeof msg!=='object') return;
   if(msg.type==='navigate' && routes.includes(msg.panel)) {route(msg.panel);return;}
@@ -103,6 +184,32 @@ window.addEventListener('message',event=>{
     text('analysisErrors',msg.analysis.errors);text('analysisWarnings',msg.analysis.warnings);text('analysisExplanation',msg.analysis.explanation);
     const list=document.getElementById('analysisList');list.textContent='';
     (msg.analysis.diagnostics||[]).slice(0,12).forEach(entry=>{const div=document.createElement('div');div.className='analysis-entry';div.textContent=entry.raw||entry.message;list.appendChild(div);});
+  }
+  if(msg.type==='serialState') serialState(msg.state);
+  if(msg.type==='serialSnapshot') {serialUiLines=Array.isArray(msg.lines)?msg.lines.slice(-500):[];renderSerialOutput();serialState(msg.state);}
+  if(msg.type==='serialData') appendSerialLines(msg.lines);
+  if(msg.type==='serialGraph') {
+    if(serialUiState){serialUiState.graph=msg.graph;serialUiState.graphPaused=Boolean(msg.paused);}
+    renderSerialGraph(msg.graph,msg.paused);
+  }
+});
+document.addEventListener('submit',event=>{
+  if(event.target.id==='serialConnectForm') {
+    event.preventDefault();
+    vscode.postMessage({type:'serialConnect',options:{path:document.getElementById('serialPortSelect').value,
+      baudRate:Number(document.getElementById('serialBaudRate').value),dataBits:Number(document.getElementById('serialDataBits').value),
+      parity:document.getElementById('serialParity').value,stopBits:Number(document.getElementById('serialStopBits').value),
+      rtscts:document.getElementById('serialRtsCts').checked}});
+  } else if(event.target.id==='serialSendForm') {
+    event.preventDefault();
+    vscode.postMessage({type:'serialSend',text:document.getElementById('serialTx').value,mode:document.getElementById('serialTxMode').value,
+      appendNewline:document.getElementById('serialAppendNewline').checked});
+  }
+});
+document.addEventListener('change',event=>{
+  if(event.target.id==='serialDisplayMode'||event.target.id==='serialTimestamps') {
+    vscode.postMessage({type:'serialDisplay',mode:document.getElementById('serialDisplayMode').value,timestamps:document.getElementById('serialTimestamps').checked});
+    renderSerialOutput();
   }
 });
 vscode.postMessage({type:'refreshSettings'});

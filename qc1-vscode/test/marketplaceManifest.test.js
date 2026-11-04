@@ -25,6 +25,19 @@ test("Marketplace metadata and probe selection command are packaged", () => {
     assert.ok(fs.existsSync(path.join(root, "docs", file)), `missing docs/${file}`);
 });
 
+test("UART runtime modules and native bindings are included by the VSIX file allowlist", () => {
+  assert.equal(manifest.dependencies.serialport, "13.0.0");
+  for (const pattern of [
+    "node_modules/serialport/**",
+    "node_modules/@serialport/**",
+    "node_modules/debug/**",
+    "node_modules/ms/**",
+    "node_modules/node-addon-api/**",
+    "node_modules/node-gyp-build/**",
+  ]) assert.ok(manifest.files.includes(pattern), `missing VSIX file pattern ${pattern}`);
+  assert.ok(fs.existsSync(path.join(root, "docs", "UART.md")));
+});
+
 test("hybrid explorer and editor dashboard are contributed and activated", () => {
   assert.ok(manifest.activationEvents.includes("onView:qc1.explorer"));
   assert.ok(manifest.activationEvents.includes("onCommand:qc1.openDashboard"));

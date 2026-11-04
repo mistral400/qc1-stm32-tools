@@ -79,6 +79,10 @@ const operationCoordinator_1 = require("./qc1/operationCoordinator");
 const artifactValidation_1 = require("./qc1/artifactValidation");
 const hardwareResources_1 = require("./qc1/hardwareResources");
 const resetConfiguration_1 = require("./qc1/resetConfiguration");
+const serialMonitor_1 = require("./qc1/serialMonitor");
+const serialPlotProtocol_1 = require("./qc1/serialPlotProtocol");
+const operationTimeline_1 = require("./qc1/operationTimeline");
+const diagnosticGuidance_1 = require("./qc1/diagnosticGuidance");
 // État métier unique partagé par les Webviews QC1 et la TreeView native.
 let dashboardState = dashboardState_1.defaultDashboardState;
 const dashboardWebviews = new Set();
@@ -97,6 +101,7 @@ let embeddedNinjaPath = "";
 const hardwareResources = new hardwareResources_1.HardwareResourceCoordinator();
 const debugResourceIds = new Map();
 const openOcdTerminalResourceIds = new Map();
+const OPERATION_TIMELINE_STORAGE_KEY = "qc1.operationTimeline.v1";
 function observeCortexDebugSession(session) {
     if (session.type !== "cortex-debug" && session.configuration.servertype !== "openocd")
         return;
@@ -291,6 +296,15 @@ function createQc1Error(input) {
 function getExitCode(error) {
     const code = error?.code;
     return typeof code === "number" ? code : null;
+}
+function serialErrorText(error) {
+    const value = error;
+    const message = typeof value?.message === "string" ? value.message : String(error);
+    if (value?.code === "EBUSY" || value?.code === "EAGAIN" || /resource busy|port.*(?:busy|in use|occup)/i.test(message))
+        return "Port série déjà occupé : " + message;
+    if (value?.code === "EACCES" || value?.code === "EPERM" || /permission denied|access denied/i.test(message))
+        return "Permission USB refusée : " + message;
+    return message;
 }
 function isTimeoutError(error) {
     const err = error;
@@ -1037,35 +1051,6 @@ function artifactSnapshot(filePath) {
     }
 }
 // === TERMINAUX EXTERNES ET COMMANDE CMAKE ==================================
-/** Ouvre un vrai terminal VS Code pour le port série; la sortie n'est pas dans la Webview. */
-function openSerialTerminal(context) {
-    if (!vscode.workspace.isTrusted) {
-        void vscode.window.showWarningMessage("Approuve le workspace avant d'ouvrir un outil externe.");
-        return;
-    }
-    const status = getQc1Status(context);
-    if (!status.serialPort) {
-        vscode.window.showErrorMessage("Aucun port série détecté. Configure qc1.serialPort puis réessaie.");
-        return;
-    }
-    let terminal;
-    if (os.platform() === "win32") {
-        if (!/^COM\d+$/i.test(status.serialPort) || !Number.isInteger(status.baudRate) || status.baudRate <= 0) {
-            void vscode.window.showErrorMessage("Port COM ou baud rate invalide.");
-            return;
-        }
-        terminal = vscode.window.createTerminal({ name: "QC1 Serial", shellPath: (0, processTools_1.resolveExecutable)("cmd.exe") || "cmd.exe", shellArgs: ["/d", "/c", `mode ${status.serialPort} BAUD=${status.baudRate} PARITY=n DATA=8 STOP=1 && type ${status.serialPort}`], env: getExecutionEnv(status) });
-    }
-    else {
-        const screenPath = findExecutable("screen");
-        if (!screenPath) {
-            vscode.window.showErrorMessage("La commande screen est introuvable; installe-la ou utilise un moniteur série VS Code.");
-            return;
-        }
-        terminal = vscode.window.createTerminal({ name: "QC1 Serial", shellPath: screenPath, shellArgs: [status.serialPort, String(status.baudRate)], env: getExecutionEnv(status) });
-    }
-    terminal.show();
-}
 /** Ouvre OpenOCD en mode serveur dans un terminal indépendant. */
 function startOpenOcdTerminal(context) {
     if (!vscode.workspace.isTrusted) {
@@ -1444,7 +1429,9 @@ function syncDashboardState(context) {
             stlinkProbeStatus: status.stlinkProbeStatus,
             stlinkModel: stlinkProbeModel,
             stlinkCheckedAt,
-            cmakeDetected: status.cmakeOk
+            cmakeDetected: status.cmakeOk,
+            serialPort: status.serialPort,
+            baudRate: status.baudRate
         },
         hardwareSessions: hardwareResources.list().map((lease) => ({
             owner: lease.owner,
@@ -1497,11 +1484,47 @@ class QC1PanelProvider {
         this.disposables = [];
         this.watchers = [];
         this.operationHistory = new operationHistory_1.ProjectOperationHistory();
+        this.serialMonitor = new serialMonitor_1.SerialMonitorService();
+        this.serialPlotParser = new serialPlotProtocol_1.SerialPlotLineParser();
+        this.serialPlotHistory = new serialPlotProtocol_1.BoundedSerialPlotHistory(1000);
+        this.serialPorts = [];
+        this.serialDisplayMode = "ascii";
+        this.serialTimestamps = false;
+        this.serialState = "disconnected";
+        this.serialError = "";
+        this.serialGraphPaused = false;
+        this.serialRxBytes = 0;
+        this.serialTxBytes = 0;
+        this.serialDroppedLines = 0;
+        this.serialLogLines = [];
+        this.pendingSerialLines = [];
         this.outputLines = [];
+        this.operationTimeline = new operationTimeline_1.OperationTimeline(this.context.globalState.get(OPERATION_TIMELINE_STORAGE_KEY, []));
+        dashboardState = { ...dashboardState, operationHistory: this.operationTimeline.snapshot() };
         this.resetProfiles = new resetConfiguration_1.ProjectResetProfileStore({
             get: (key) => this.context.globalState.get(key),
             update: (key, value) => this.context.globalState.update(key, value),
         });
+        this.serialMonitor.on("open", (portPath) => {
+            this.serialState = "connected";
+            this.serialError = "";
+            if (this.serialOptions)
+                this.serialOptions.path = portPath;
+            this.sendSerialState();
+            this.postStatus("UART connecté : " + portPath, "success");
+        });
+        this.serialMonitor.on("close", () => {
+            this.serialState = "disconnected";
+            this.sendSerialState();
+        });
+        this.serialMonitor.on("fault", (error) => {
+            this.serialState = "error";
+            this.serialError = error.message;
+            this.sendSerialState();
+            this.postStatus("Erreur du moniteur UART", "error");
+        });
+        this.serialMonitor.on("data", (data) => this.handleSerialData(data));
+        this.serialMonitor.on("transmit", (byteCount) => { this.serialTxBytes += byteCount; });
         this.configuration = new projectConfiguration_1.ProjectConfigurationController({
             hasWorkspace: () => Boolean(vscode.workspace.workspaceFolders?.length || vscode.workspace.workspaceFile),
             update: (key, value, target) => {
@@ -1674,11 +1697,13 @@ class QC1PanelProvider {
     dispose() {
         this.disposed = true;
         clearTimeout(this.refreshTimer);
+        clearTimeout(this.serialFlushTimer);
         this.discovery.dispose();
         this.watchers.forEach((watcher) => watcher.dispose());
         this.editorPanel?.dispose();
         this.editorPanel = undefined;
         this.disposables.forEach((disposable) => disposable.dispose());
+        void this.serialMonitor.dispose().catch((error) => outputChannel?.appendLine("[QC1] Fermeture UART: " + String(error)));
     }
     attachWebview(webview, initialPanel = "projectPanel") {
         webview.options = { enableScripts: true, localResourceRoots: [this.extensionUri] };
@@ -1708,6 +1733,7 @@ class QC1PanelProvider {
         refreshDashboard();
         this.publishProjectDiscovery();
         this.postStatus("Ready", "idle");
+        this.sendSerialSnapshot();
         this.initializeManager();
     }
     openEditorDashboard(initialPanel = "projectPanel") {
@@ -1831,6 +1857,42 @@ class QC1PanelProvider {
                     break;
                 case "startOpenOcd":
                     this.startOpenOcd();
+                    break;
+                case "serialRefresh":
+                    await this.refreshSerialPorts();
+                    break;
+                case "serialConnect":
+                    await this.connectSerial(msg.options);
+                    break;
+                case "serialDisconnect":
+                    await this.disconnectSerial();
+                    break;
+                case "serialSend":
+                    await this.sendSerialData(msg.text, msg.mode, msg.appendNewline);
+                    break;
+                case "serialDisplay":
+                    this.serialDisplayMode = msg.mode;
+                    this.serialTimestamps = msg.timestamps;
+                    this.sendSerialState();
+                    break;
+                case "serialClear":
+                    this.serialLogLines = [];
+                    this.pendingSerialLines = [];
+                    this.serialPlotParser.clear();
+                    this.serialPlotHistory.clear();
+                    this.sendSerialSnapshot();
+                    break;
+                case "serialSaveLog":
+                    await this.saveSerialLog();
+                    break;
+                case "serialGraphControl":
+                    await this.controlSerialGraph(msg.action);
+                    break;
+                case "clearOperationHistory":
+                    this.operationTimeline.clear();
+                    dashboardState = { ...dashboardState, operationHistory: [] };
+                    this.sendDashboardState();
+                    await this.context.globalState.update(OPERATION_TIMELINE_STORAGE_KEY, []);
                     break;
                 case "openArtifact": {
                     const artifact = dashboardState.artifacts.find((item) => item.id === msg.id);
@@ -2203,7 +2265,7 @@ class QC1PanelProvider {
             return;
         }
         if (command === "serial") {
-            openSerialTerminal(this.context);
+            this.openSerial();
             return;
         }
         if (this.settingsUpdating) {
@@ -2215,10 +2277,42 @@ class QC1PanelProvider {
             return;
         }
         this.buildRunning = true;
-        void this.runQC1(command).catch(error => {
+        const projectPath = getQc1Status(this.context).projectPath;
+        const startedAt = Date.now();
+        const record = (error) => {
+            void this.recordOperationTimeline(command, projectPath, startedAt, error)
+                .catch((failure) => outputChannel?.appendLine("[QC1] Historique: " + String(failure)));
+        };
+        void this.runQC1(command).then(() => {
+            record();
+        }).catch(error => {
             this.appendOutput(error instanceof Error ? error.message : String(error), "error");
             this.postStatus("Opération QC1 échouée", "error");
+            record(error);
         }).finally(() => { this.buildRunning = false; });
+    }
+    async recordOperationTimeline(command, projectPath, startedAt, thrown) {
+        const snapshot = this.projectOperationSnapshot(projectPath);
+        const operations = snapshot.operations;
+        const operation = (0, operationTimeline_1.summarizeOperation)(command);
+        const result = (0, operationTimeline_1.classifyTimelineResult)(operation, operations, (0, operationHistory_1.isFlashFullyConfirmed)(operations), Boolean(thrown));
+        const errorText = thrown instanceof Error ? thrown.message : thrown ? String(thrown) : (0, operationTimeline_1.timelineFailureMessage)(operation, operations);
+        const projectName = projectPath ? path.basename(projectPath) : "Sans projet";
+        this.operationTimeline.append({
+            id: (0, crypto_1.randomUUID)(),
+            project: projectName,
+            occurredAt: new Date().toISOString(),
+            operation,
+            durationMs: Math.max(0, Date.now() - startedAt),
+            result,
+            tools: dashboardState.tools.filter((tool) => tool.status === "OK").map((tool) => tool.name),
+            backend: snapshot.flash.method || "—",
+            verification: operations.verification.message || operations.verification.status,
+            error: errorText,
+        });
+        dashboardState = { ...dashboardState, operationHistory: this.operationTimeline.snapshot() };
+        this.sendDashboardState();
+        await this.context.globalState.update(OPERATION_TIMELINE_STORAGE_KEY, this.operationTimeline.snapshot());
     }
     detectStlink() {
         this.runStatus("detect-stlink");
@@ -2321,7 +2415,13 @@ class QC1PanelProvider {
         return selected.serialNumber;
     }
     openSerial() {
-        openSerialTerminal(this.context);
+        if (this.disposed)
+            return;
+        if (dashboardWebviews.size)
+            postDashboardMessage({ type: "navigate", panel: "toolsPanel" });
+        else
+            this.openEditorDashboard("toolsPanel");
+        void this.refreshSerialPorts();
     }
     startOpenOcd() {
         if (this.buildRunning || this.probeRunning) {
@@ -3298,6 +3398,224 @@ class QC1PanelProvider {
             views: (0, dashboardHtml_1.renderDashboardViews)(dashboardState),
         });
         dashboardTreeProvider?.refresh();
+        this.sendSerialState();
+    }
+    serialMonitorState(includeGraph = false) {
+        const status = getQc1Status(this.context);
+        const configured = this.serialOptions || {
+            path: status.serialPort,
+            baudRate: status.baudRate,
+            dataBits: 8,
+            parity: "none",
+            stopBits: 1,
+        };
+        return {
+            status: this.serialState,
+            connected: this.serialMonitor.connected,
+            ports: this.serialPorts,
+            selectedPort: configured.path,
+            baudRate: configured.baudRate,
+            dataBits: configured.dataBits,
+            parity: configured.parity,
+            stopBits: configured.stopBits,
+            rtscts: configured.rtscts ?? false,
+            displayMode: this.serialDisplayMode,
+            timestamps: this.serialTimestamps,
+            rxBytes: this.serialRxBytes,
+            txBytes: this.serialTxBytes,
+            droppedLines: this.serialDroppedLines,
+            error: this.serialError,
+            graphPaused: this.serialGraphPaused,
+            guidance: (0, diagnosticGuidance_1.getDiagnosticGuidance)({ title: "Erreur UART", message: this.serialError }),
+            ...(includeGraph ? { graph: this.serialPlotHistory.snapshot() } : {}),
+        };
+    }
+    sendSerialState() {
+        if (!this.disposed)
+            postDashboardMessage({ type: "serialState", state: this.serialMonitorState() });
+    }
+    sendSerialSnapshot() {
+        if (!this.disposed)
+            postDashboardMessage({
+                type: "serialSnapshot",
+                state: this.serialMonitorState(true),
+                lines: this.serialLogLines,
+            });
+    }
+    async refreshSerialPorts() {
+        if (!vscode.workspace.isTrusted) {
+            this.serialError = "Approuve ce workspace avant d'accéder aux ports série.";
+            this.sendSerialState();
+            return;
+        }
+        try {
+            this.serialPorts = await this.serialMonitor.enumeratePorts();
+            this.serialError = "";
+        }
+        catch (error) {
+            this.serialError = serialErrorText(error);
+        }
+        this.sendSerialState();
+        this.postStatus(this.serialError || String(this.serialPorts.length) + " port(s) série disponible(s)", this.serialError ? "error" : "success");
+    }
+    async connectSerial(options) {
+        if (!vscode.workspace.isTrusted) {
+            this.serialError = "Approuve ce workspace avant d'ouvrir un port série.";
+            this.serialState = "error";
+            this.sendSerialState();
+            return;
+        }
+        if (this.buildRunning || this.probeRunning) {
+            this.serialError = "Attends la fin de l'opération QC1 en cours avant d'ouvrir le port UART.";
+            this.sendSerialState();
+            return;
+        }
+        this.serialOptions = { ...options };
+        this.serialState = "connecting";
+        this.serialError = "";
+        this.serialRxBytes = 0;
+        this.serialTxBytes = 0;
+        this.serialDroppedLines = 0;
+        this.serialGraphPaused = false;
+        this.serialPlotParser.clear();
+        this.serialPlotHistory.clear();
+        this.sendSerialState();
+        try {
+            await this.serialMonitor.connect(options);
+        }
+        catch (error) {
+            if (error.message === "Connexion UART annulée.") {
+                this.serialState = "disconnected";
+                this.serialError = "";
+                this.sendSerialState();
+                return;
+            }
+            this.serialState = "error";
+            this.serialError = serialErrorText(error);
+            this.sendSerialState();
+        }
+    }
+    async disconnectSerial() {
+        await this.serialMonitor.disconnect();
+        this.serialState = "disconnected";
+        this.serialError = "";
+        this.sendSerialState();
+        this.postStatus("Moniteur UART déconnecté", "idle");
+    }
+    async sendSerialData(text, mode, appendNewline) {
+        try {
+            let data = mode === "hex" ? (0, serialMonitor_1.parseHexBytes)(text) : Buffer.from(text, "utf8");
+            if (appendNewline)
+                data = Buffer.concat([data, Buffer.from([0x0d, 0x0a])]);
+            await this.serialMonitor.send(data);
+            this.appendSerialLogLine("TX", data);
+            this.sendSerialState();
+            this.scheduleSerialFlush();
+        }
+        catch (error) {
+            this.serialError = serialErrorText(error);
+            this.sendSerialState();
+            this.postStatus("Échec de transmission UART", "error");
+        }
+    }
+    appendSerialLogLine(direction, data) {
+        const append = (bytes) => {
+            const entry = {
+                time: new Date().toISOString(),
+                direction,
+                ascii: [...bytes].map((byte) => byte === 0x0a ? "\n" : byte === 0x0d ? "\r" : byte === 0x09 ? "\t" :
+                    byte >= 0x20 && byte <= 0x7e ? String.fromCharCode(byte) : "\\x" + byte.toString(16).padStart(2, "0")).join(""),
+                hex: (0, serialMonitor_1.serialChunkAsHex)(bytes),
+            };
+            this.serialLogLines.push(entry);
+            this.pendingSerialLines.push(entry);
+        };
+        for (let offset = 0; offset < data.length; offset += 256)
+            append(data.subarray(offset, offset + 256));
+        if (this.serialLogLines.length > 500) {
+            const dropped = this.serialLogLines.length - 500;
+            this.serialLogLines.splice(0, dropped);
+            this.serialDroppedLines += dropped;
+        }
+        if (this.pendingSerialLines.length > 100) {
+            const dropped = this.pendingSerialLines.length - 100;
+            this.pendingSerialLines.splice(0, dropped);
+            this.serialDroppedLines += dropped;
+        }
+    }
+    handleSerialData(data) {
+        if (this.disposed)
+            return;
+        this.serialRxBytes += data.length;
+        this.appendSerialLogLine("RX", data);
+        const result = this.serialPlotParser.push(data.toString("utf8"));
+        if (!this.serialGraphPaused)
+            for (const sample of result.samples)
+                this.serialPlotHistory.append(sample);
+        this.scheduleSerialFlush();
+    }
+    scheduleSerialFlush() {
+        if (this.serialFlushTimer || this.disposed)
+            return;
+        this.serialFlushTimer = setTimeout(() => {
+            this.serialFlushTimer = undefined;
+            if (this.disposed)
+                return;
+            const lines = this.pendingSerialLines.splice(0, this.pendingSerialLines.length);
+            if (lines.length)
+                postDashboardMessage({ type: "serialData", lines });
+            postDashboardMessage({ type: "serialGraph", graph: this.serialPlotHistory.snapshot(), paused: this.serialGraphPaused });
+            this.sendSerialState();
+        }, 50);
+    }
+    async saveSerialLog() {
+        if (!this.serialLogLines.length) {
+            this.postStatus("Aucune donnée UART à enregistrer", "idle");
+            return;
+        }
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+        const root = getQc1Status(this.context).projectPath || getWorkspaceRoot() || this.context.extensionPath;
+        const uri = await vscode.window.showSaveDialog({
+            defaultUri: vscode.Uri.file(path.join(root, "qc1-uart-" + timestamp + ".txt")),
+            filters: { Texte: ["txt", "log"] },
+            saveLabel: "Enregistrer le journal UART",
+        });
+        if (!uri)
+            return;
+        const mode = this.serialDisplayMode;
+        const lines = this.serialLogLines.map((entry) => (this.serialTimestamps ? "[" + entry.time + "] " : "") + entry.direction + " " + (mode === "hex" ? entry.hex : entry.ascii));
+        await vscode.workspace.fs.writeFile(uri, Buffer.from(lines.join("\n") + "\n", "utf8"));
+        this.postStatus("Journal UART enregistré", "success");
+    }
+    async controlSerialGraph(action) {
+        if (action === "pause")
+            this.serialGraphPaused = true;
+        else if (action === "resume")
+            this.serialGraphPaused = false;
+        else if (action === "clear") {
+            this.serialPlotHistory.clear();
+            this.serialPlotParser.clear();
+        }
+        else {
+            const { samples, series } = this.serialPlotHistory.snapshot();
+            if (!samples.length) {
+                this.postStatus("Aucune donnée graphique à exporter", "idle");
+                return;
+            }
+            const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+            const root = getQc1Status(this.context).projectPath || getWorkspaceRoot() || this.context.extensionPath;
+            const uri = await vscode.window.showSaveDialog({
+                defaultUri: vscode.Uri.file(path.join(root, "qc1-uart-" + timestamp + ".csv")),
+                filters: { CSV: ["csv"] },
+                saveLabel: "Exporter le graphique CSV",
+            });
+            if (!uri)
+                return;
+            const csv = ["time_ms," + series.join(","), ...samples.map((sample) => [sample.timeMs, ...series.map((name) => sample.values[name] ?? "")].join(","))].join("\n") + "\n";
+            await vscode.workspace.fs.writeFile(uri, Buffer.from(csv, "utf8"));
+            this.postStatus("Données graphiques exportées", "success");
+        }
+        this.sendSerialSnapshot();
     }
     postStatus(text, state) {
         postDashboardMessage({

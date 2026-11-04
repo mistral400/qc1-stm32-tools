@@ -2,7 +2,7 @@
   "name": "qc1-stm32-tools",
   "displayName": "QC1 STM32 Tools",
   "description": "Outils STM32F1 et STM32H7 dual-core pour VS Code",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "publisher": "Mistral400",
   "icon": "media/icon.png",
   "repository": {
@@ -27,6 +27,12 @@
   ],
   "files": [
     "out/**",
+    "node_modules/serialport/**",
+    "node_modules/@serialport/**",
+    "node_modules/debug/**",
+    "node_modules/ms/**",
+    "node_modules/node-addon-api/**",
+    "node_modules/node-gyp-build/**",
     "media/**",
     "resources/cmake/**",
     "docs/**",
@@ -515,5 +521,8 @@
     "eslint": "^10.10.0",
     "typescript": "^5.0.0",
     "typescript-eslint": "^8.70.0"
+  },
+  "dependencies": {
+    "serialport": "13.0.0"
   }
 }

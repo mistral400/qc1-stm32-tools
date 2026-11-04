@@ -48,6 +48,20 @@ L'extension Embedded Build Tools peut demander de télécharger sa toolchain qua
 
 Les commandes sont aussi accessibles depuis la palette VS Code avec `Cmd+Shift+P` sur macOS ou `Ctrl+Shift+P` sur Windows/Linux.
 
+## Moniteur UART et graphique
+
+Dans **Outils**, actualise les ports, sélectionne le port relié à la carte et règle le baud rate, les bits, la parité, les bits d'arrêt et le contrôle RTS/CTS. Le moniteur accepte un envoi texte UTF-8 ou HEX, avec ajout CRLF facultatif. La réception s'affiche en ASCII échappé ou en HEX; les horodatages et l'enregistrement du journal sont facultatifs. QC1 ne sauvegarde pas automatiquement le trafic série. L'accès aux ports exige un workspace approuvé.
+
+Le graphique ne déduit pas de nombres à partir du texte libre. Il accepte les lignes JSON suivantes, terminées par LF :
+
+```json
+{"qc1_plot":1,"time_ms":123,"values":{"temperature_c":22.5,"adc_voltage":1.82}}
+```
+
+`time_ms` définit l'axe horizontal; chaque valeur doit être finie et chaque nom de variable doit commencer par une lettre. QC1 limite chaque ligne à 2 048 caractères, le graphique à 8 variables et 1 000 échantillons, et l'affichage série à 500 fragments. Les données restent en mémoire de session jusqu'à fermeture ou effacement; seules les commandes **Enregistrer le journal** et **Exporter CSV** écrivent un fichier choisi par l'utilisateur.
+
+Le transport utilise `serialport` 13 et ses bindings natifs N-API, chargés uniquement à l'ouverture du moniteur. La documentation amont indique le support Electron pour les versions récentes et prend officiellement en charge Linux x64, macOS x64/Apple Silicon et Windows x64; Linux ARM64 est construit mais reste « best effort ». Le test d'activation de QC1 ne remplace pas les validations du moniteur sur chaque OS et architecture. Voir [Moniteur UART](docs/UART.md).
+
 ## Sécurité et limites
 
 Les commandes QC1 sont lancées sans shell avec des arguments séparés. Build, flash, debug et collecte des outils requièrent un workspace approuvé. La sélection de sonde ne programme, n'efface et ne réinitialise pas la carte; le reset intervient seulement dans une commande de flash explicitement demandée.
@@ -62,6 +76,7 @@ Le diagnostic matériel n'est pas une preuve de build, de flash, de vérificatio
 - [Import STM32CubeIDE STM32H7 dual-core](docs/STM32H7_CUBEIDE.md)
 - [Gestion multi-projet](docs/MULTI_PROJECT.md)
 - [Diagnostics et rapports](docs/DIAGNOSTICS.md)
+- [Moniteur UART](docs/UART.md)
 - [Tests reproductibles](docs/TESTING.md)
 - [Matrice de compatibilité](docs/COMPATIBILITY_MATRIX.md)
 - [Préparation Marketplace](docs/MARKETPLACE_READINESS.md)

@@ -17,6 +17,12 @@ La commande **Show STM32 Status** prend une photographie du projet et des outils
 
 Le texte original d'une commande reste accessible dans les lignes du rapport/log; une classification ne remplace pas stdout/stderr.
 
+## Historique et diagnostics guidés
+
+L'historique conserve au plus 200 résumés dans le stockage global VS Code. Il garde l'opération, le nom de base du projet, la date, la durée, le résultat, les outils détectés, le backend et la vérification; les chemins complets, commandes, journaux bruts, trafic UART et numéros de sonde ne sont pas persistés. **Effacer l'historique** supprime cette liste.
+
+Les diagnostics guidés affichent des étapes manuelles pour quelques erreurs connues (outils absents, artefact, probe/USB, conflits OpenOCD, programmation/vérification/reset, UART occupé). Un message non reconnu reste inchangé : QC1 n'invente pas de réparation et ne change pas les permissions, réglages ou état matériel.
+
 ## Créer et partager un rapport
 
 1. Lance **Créer un rapport de diagnostic** après une erreur reproduite.

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.7 - 2026-11-04
+
+- Add a Tools-page UART monitor with port discovery, framing controls, ASCII/HEX TX and RX, optional CRLF and timestamps, cancellable connection, bounded display, and explicit log saving.
+- Add an opt-in JSON Lines plot protocol, a 1,000-sample ring, pause/resume, clear and CSV export; free-form serial text is never interpreted as chart data.
+- Persist up to 200 sanitized operation summaries locally and add manual, curated diagnostic guidance for known conditions.
+- Load SerialPort 13 lazily so unsupported native bindings cannot block extension activation; keep project paths, probe serial numbers and UART traffic out of operation history.
+- Add mocked serial transport, protocol, cancellation, bounds, timeline and UI regression coverage. Production dependency audit reports no advisories.
+- No physical STM32/UART test or cross-OS visual validation was run.
+
 ## 0.4.6 - 2026-11-04
 
 - Add a native QC1 Explorer TreeView for the active/recent/detected projects, artifacts, prioritized diagnostics, essential tools, ST-Link and known sessions.

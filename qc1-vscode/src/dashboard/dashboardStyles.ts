@@ -174,6 +174,26 @@ legend { padding: 0 4px; }
 .checkbox input { accent-color: var(--vscode-checkbox-selectBackground, var(--qc1-focus)); }
 form > button { margin-top: 10px; }
 .analysis-entry { margin: 8px 0; padding-left: 8px; border-left: 2px solid var(--qc1-border); overflow-wrap: anywhere; }
+.guided-solution { margin: 6px 0; padding: 5px 8px; border: 1px solid var(--qc1-border); border-radius: 4px; }
+.guided-solution summary { min-height: 24px; }
+.operation-history-item { padding: 8px 0; border-top: 1px solid var(--qc1-border); }
+.operation-history-item p { margin: 5px 0; overflow-wrap: anywhere; }
+.serial-grid { display: grid; grid-template-columns: minmax(72px, .7fr) minmax(0, 1.3fr); align-items: center; gap: 2px 8px; }
+.serial-grid > label { margin: 6px 0; }
+.serial-actions { grid-column: 1 / -1; }
+.serial-display-options { display: grid; grid-template-columns: auto minmax(90px, 1fr) auto minmax(0, 1fr); align-items: center; gap: 6px 8px; }
+.serial-display-options > label { margin: 6px 0; }
+.serial-output { min-height: 100px; max-height: 260px; margin: 8px 0; overflow: auto; padding: 8px; border: 1px solid var(--qc1-border); background: var(--vscode-terminal-background, var(--vscode-editor-background, #1e1e1e)); font: 11px/1.5 var(--vscode-editor-font-family, monospace); white-space: pre-wrap; overflow-wrap: anywhere; }
+.serial-graph-header { display: flex; justify-content: space-between; gap: 8px; margin-top: 14px; }
+.serial-graph { display: block; width: 100%; height: auto; min-height: 110px; border: 1px solid var(--qc1-border); background: var(--vscode-editor-background, var(--qc1-bg)); }
+.serial-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 5px 0; font-size: 11px; }
+.serial-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.serial-legend-swatch { width: 10px; height: 10px; border-radius: 50%; background: var(--series-color); }
+.status-line { padding: 5px 0; font-weight: 600; }
+@media (max-width: 400px) {
+  .serial-display-options { grid-template-columns: auto minmax(0, 1fr); }
+  .serial-grid { grid-template-columns: minmax(65px, .55fr) minmax(0, 1.45fr); }
+}
 
 @media (max-width: 480px) {
   body { padding: 9px; }

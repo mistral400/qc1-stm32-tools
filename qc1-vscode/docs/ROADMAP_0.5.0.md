@@ -32,7 +32,7 @@ Les deux tests ignorés nécessitent `QC1_CUBE_H7_PATH` (installation locale STM
 | 0.4.4 | Reset configurable par backend et projet | Modes disponibles seulement quand documentés/supportés; incompatibilités refusées; NRST non présumé; tests d'arguments sans carte |
 | 0.4.5 | Modernisation du Webview existant | Navigation compacte, hiérarchie d'actions, états lisibles, accessibilité sémantique, thèmes; tests UI automatisés et vérifications visuelles déclarées séparément |
 | 0.4.6 | Navigation hybride VS Code / TreeViews / dashboard éditeur | Synchronisation sans état métier dupliqué, commandes existantes préservées, activation et packaging |
-| 0.4.7 | UART TX/RX, données graphiques bornées, historique et diagnostics guidés | Tests avec ports/processus simulés, mémoire bornée, documentation multiplateforme; aucun test matériel implicite |
+| 0.4.7 | UART TX/RX, données graphiques bornées, historique et diagnostics guidés | Tests avec ports/processus simulés, mémoire bornée, documentation multiplateforme, dépendance native incluse au VSIX; aucun test matériel implicite |
 | 0.5.0 | Inspection statique ELF/MAP Flash/RAM et stabilisation intégrée | Ne pas confondre RAM statique et runtime; STM32F1/H7 couverts; CI, tests, packaging, documentation et limites matérielles vérifiés |
 
 ## Garde-fous
@@ -43,7 +43,7 @@ Les deux tests ignorés nécessitent `QC1_CUBE_H7_PATH` (installation locale STM
 
 ## État de travail
 
-Inspection et baseline terminées. Jalons 0.4.1 à 0.4.5 sont validés et checkpointés. Le jalon 0.4.6 est implémenté et validé par les tests logiciels et le smoke VS Code; validation visuelle non effectuée. Prochain jalon : **0.4.7 — UART, historique et diagnostics guidés**.
+Inspection et baseline terminées. Jalons 0.4.1 à 0.4.6 sont validés et checkpointés. Le jalon 0.4.7 est validé localement et empaqueté; aucune validation matérielle ou visuelle multiplateforme n'a été faite. Prochain jalon : **0.5.0 — inspection statique ELF/MAP Flash/RAM et stabilisation intégrée**.
 
 ### Jalon validé et checkpointé localement — 0.4.1
 
@@ -109,3 +109,15 @@ Inspection et baseline terminées. Jalons 0.4.1 à 0.4.5 sont validés et checkp
 - VS Code 1.144.1 / macOS arm64 : activation, commandes publiques, ouverture/réouverture du dashboard éditeur et ouverture du conteneur QC1 PASS (1 smoke test). Aucune inspection visuelle de la TreeView ou du panneau éditeur, aucun test Windows/Linux ou matériel.
 - Packaging local PASS : `qc1-stm32-tools-0.4.6.vsix` (111 fichiers, environ 370 KB); intégrité ZIP, modules TreeView et version 0.4.6 du manifeste vérifiés. Le checkpoint Git local est créé après validation.
 - Aucun test matériel ni CI distante; inspection visuelle et validation sur Windows/Linux restent à faire.
+
+### Jalon validé et empaqueté localement — 0.4.7
+
+- `src/qc1/serialMonitor.ts` fournit une connexion UART injectable, énumération sans numéros de série, paramètres bornés, annulation/timeouts et TX avec vidage confirmé. Le moniteur accepte texte UTF-8 ou HEX, RX ASCII échappé/HEX, timestamps et enregistrement explicite.
+- `src/qc1/serialPlotProtocol.ts` ne traite que le protocole JSON Lines `qc1_plot: 1`; lignes de 2 048 caractères, huit séries, historique de 1 000 échantillons, fragments RX bornés à 500 (journal) et 100 (file UI), rendu limité à 20 Hz.
+- `src/qc1/operationTimeline.ts` conserve au plus 200 résumés expurgés dans `globalState`; résultat Run réussi seulement lorsque les étapes Flash sont confirmées et aucune erreur d'une autre commande n'est recopiée. `diagnosticGuidance.ts` offre des étapes manuelles connues et ne répare rien automatiquement.
+- Le manifeste passe à **0.4.7**. `serialport@13.0.0` reste un import paresseux. Les globs VSIX incluent les modules runtime et bindings natifs; la vérification a trouvé les prebuilds macOS universal, Linux x64 glibc/musl et Windows x64. Le paquet décompressé a initialisé son binding macOS arm64 avec `autoOpen: false`; aucun port n'a été ouvert.
+- Validation logicielle : `npm test` PASS (201 réussis, 2 ignorés, 203 total), `npm run typecheck` PASS, `npm run lint` PASS, `npm audit --omit=dev` PASS (0 vulnérabilité), `git diff --check` PASS. Les deux tests ignorés restent GPIO_Demo avec CubeH7 local et ExternalProject sans CMake/Ninja/ARM GNU présents.
+- Smoke d'activation du code source dans un profil temporaire : PASS, VS Code 1.145.0 / macOS arm64, déclenché par `workspaceContains:CMakeLists.txt`; aucun flash, reset, test matériel ou ouverture de port. Le journal a signalé des avertissements existants de portée de configuration `qc1.*`; pas d'exception d'activation QC1.
+- Packaging PASS : `qc1-stm32-tools-0.4.7.vsix` (326 fichiers, 1,42 MB), `unzip -t` PASS, SHA-256 `328e4f585782701da031d5a8982c23923cc6f30e33be6ee654b4f3ab346efc85`. `vsce` conseille le bundling pour performance; les dépendances runtime sont actuellement incluses telles quelles.
+- Installation VSIX dans un profil temporaire PASS. VS Code y a aussi résolu automatiquement les extensions déclarées dans `extensionPack`; elles et les données de ce profil restent confinées à `/tmp`.
+- Aucun test matériel, aucune validation visuelle des pages, aucun test réel de port UART sur Windows/Linux, aucune CI distante ni publication. Tag/commit local avant de démarrer 0.5.0.

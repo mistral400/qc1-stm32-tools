@@ -290,7 +290,7 @@ test("a timed-out CMake-like process does not leave its compiler child running",
   if (process.platform === "win32") { t.skip("POSIX process-group check"); return; }
   const result = await runProcess(process.execPath, ["-e",
     "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); console.log(c.pid); setInterval(()=>{},1000)"
-  ], { timeoutMs: 400 });
+  ], { timeoutMs: 1200 });
   assert.equal(result.timedOut, true);
   assert.equal(result.error, "Process timeout");
   const pid = Number(result.stdout.trim());

@@ -19,6 +19,7 @@ import type { Qc1ProgressPhase } from "./progressManager";
 import type { ProjectUiState } from "./projectUiState";
 import type { RecentProject } from "../qc1/recentProjectsController";
 import type { ToolUiState, ArtifactUiState } from "./managerUiState";
+import type { Qc1OperationTimelineEntry } from "../qc1/operationTimeline";
 
 // Valeurs de couleur/gravité utilisées pour choisir le style d'un diagnostic.
 export type QC1StatusLevel =
@@ -166,6 +167,8 @@ export interface QC1EnvironmentStatus {
   stlinkSelectedProbe?: string;
   stlinkCheckedAt?: string;
   cmakeDetected: boolean;
+  serialPort: string;
+  baudRate: number;
 }
 
 export interface QC1HardwareSession {
@@ -201,6 +204,7 @@ export interface DashboardState {
   tools: ToolUiState[];
   diagnostics: QC1Diagnostic[];
   artifacts: ArtifactUiState[];
+  operationHistory: Qc1OperationTimelineEntry[];
 }
 
 /** Convertit le nom technique de Node.js en libellé lisible dans l'interface. */
@@ -223,6 +227,7 @@ export const defaultDashboardState: DashboardState = {
   tools: [],
   diagnostics: [],
   artifacts: [],
+  operationHistory: [],
   hardwareSessions: [],
   currentAction: "Idle",
   projectName: "--",
@@ -331,7 +336,9 @@ export const defaultDashboardState: DashboardState = {
     stFlashInstalled: false,
     stlinkProbeStatus: "non testé",
     stlinkSelectedProbe: "Non sélectionnée",
-    cmakeDetected: false
+    cmakeDetected: false,
+    serialPort: "",
+    baudRate: 19200
   },
 
   projectDiscovery: {
