@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0 - 2026-11-04
+
+- Add read-only ELF section inspection from `arm-none-eabi-objdump -h`, with Flash load estimates, static RAM estimates, `.text`/`.data`/`.bss` details and linker-declared region utilization.
+- Keep STM32F1 and each H7 CM7/CM4 image separate; report linker-detected overflow, possible overlaps, map/script differences and unknown capacities without inferring device sizes.
+- Remove build-log size heuristics from dashboard build state. Runtime heap/stack usage is not claimed; explicit linker reservations are listed separately.
+- Ignore linker maps that differ from the ELF timestamp by more than ten minutes, avoid using linker-script fallback when the script is newer than the ELF, and label the artifact timestamp as provenance evidence only.
+- Add bounded, trust-gated, shell-free `objdump` inspection with timeout, output cap, cache, and unavailable/partial states.
+- Add parser, mocked-process and dashboard regression tests; document measurement definitions, provenance and physical-proof limits.
+- No hardware read, flash, reset, activation smoke, cross-OS run, or visual inspection is part of this change.
+
 ## 0.4.7 - 2026-11-04
 
 - Add a Tools-page UART monitor with port discovery, framing controls, ASCII/HEX TX and RX, optional CRLF and timestamps, cancellable connection, bounded display, and explicit log saving.

@@ -1,6 +1,13 @@
 # Matrice de compatibilité et de validation
 
-État local de mission du 26 septembre 2026. **PASS** signifie que le niveau indiqué a réellement été exécuté; un test automatisé ne devient pas un test de matériel.
+Les résultats ci-dessous contiennent un état historique de mission du 26 septembre 2026. **PASS** signifie que le niveau indiqué a réellement été exécuté; un test automatisé ne devient pas un test de matériel.
+
+## Mise à jour locale 0.5.0 — 4 novembre 2026
+
+- macOS Apple Silicon : typecheck, lint, 207 tests logiciels et packaging PASS; smoke d'installation/activation VS Code PASS dans un profil isolé.
+- Inspection mémoire : ELF STM32F103 et images H755 CM7/CM4 temporaires construites localement et analysées avec le GNU Arm `objdump`; aucun MCU ni ST-Link utilisé.
+- Windows, Linux, macOS Intel et CI distante : aucun nouveau run 0.5.0 effectué; la matrice historique ci-dessous ne prouve pas la compatibilité de cette version.
+- Tests physiques STM32F103/H755, Flash, reset, UART et inspection mémoire runtime : NON EFFECTUÉS dans ce jalon.
 
 | Scénario | Résultat | Niveau / preuve |
 | --- | --- | --- |

@@ -55,8 +55,6 @@ function parseQc1Output(output) {
     let hasFlashFailed = false;
     let elfGenerated = false;
     let binGenerated = false;
-    let flashUsage = "--";
-    let ramUsage = "--";
     for (const line of lines) {
         const lower = line.toLowerCase();
         const diagnostic = parseDiagnostic(line);
@@ -97,23 +95,6 @@ function parseQc1Output(output) {
         if (lower.includes(".bin")) {
             binGenerated = true;
         }
-        const usageMatch = line.match(/flash(?: usage| used)?\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?\s*%)/i);
-        if (usageMatch?.[1]) {
-            flashUsage = usageMatch[1].trim();
-        }
-        const ramMatch = line.match(/ram(?: usage| used)?\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?\s*%)/i);
-        if (ramMatch?.[1]) {
-            ramUsage = ramMatch[1].trim();
-        }
-        const sizeMatch = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([0-9a-fA-F]+)\s+(.+\.elf)/);
-        if (sizeMatch) {
-            const text = Number(sizeMatch[1]);
-            const data = Number(sizeMatch[2]);
-            const bss = Number(sizeMatch[3]);
-            flashUsage = `${text + data} bytes`;
-            ramUsage = `${data + bss} bytes`;
-            elfGenerated = true;
-        }
     }
     return {
         errors,
@@ -122,8 +103,6 @@ function parseQc1Output(output) {
         hasFlashFailed,
         elfGenerated,
         binGenerated,
-        flashUsage,
-        ramUsage,
         diagnostics,
         explanation: explainDiagnostic(diagnostics[0])
     };

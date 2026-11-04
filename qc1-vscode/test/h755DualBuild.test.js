@@ -4,6 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const { resolveExecutable, runProcess } = require("../out/qc1/processTools");
+const { inspectMemoryArtifact } = require("../out/qc1/memoryInspection");
 const { inspectStm32Project } = require("../out/qc1/projectDiscovery");
 const { readFileApi } = require("../out/qc1/cmakeFileApi");
 
@@ -19,10 +20,11 @@ function linker(origin) {
   return `ENTRY(Reset_Handler)\nMEMORY { FLASH (rx) : ORIGIN = ${origin}, LENGTH = 1024K\nRAM (rwx) : ORIGIN = 0x24000000, LENGTH = 512K }\nSECTIONS { .isr_vector : { KEEP(*(.isr_vector)) } > FLASH\n.text : { *(.text*) *(.rodata*) } > FLASH\n.data : { *(.data*) } > RAM AT > FLASH\n.bss : { *(.bss*) *(COMMON) } > RAM }\n`;
 }
 
-test("representative STM32H755 CMake builds distinct CM7 and CM4 ELF files", async (t) => {
+test("representative STM32H755 CMake builds and inspects distinct CM7 and CM4 ELF files", async (t) => {
   const cmake = resolveExecutable("cmake");
   const gcc = resolveExecutable("arm-none-eabi-gcc");
-  if (!cmake || !gcc) { t.skip("CMake or Arm GNU Toolchain not installed"); return; }
+  const objdump = resolveExecutable("arm-none-eabi-objdump");
+  if (!cmake || !gcc || !objdump) { t.skip("CMake or complete Arm GNU Toolchain not installed"); return; }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "qc1-h755-build-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const build = path.join(root, "build-output");
@@ -61,6 +63,23 @@ test("representative STM32H755 CMake builds distinct CM7 and CM4 ELF files", asy
   const configured = readFileApi(build, root);
   assert.ok(configured.targets.some((target) => target.name === "firmware_CM7" && target.definitions.includes("CORE_CM7")));
   assert.ok(configured.targets.some((target) => target.name === "firmware_CM4" && target.definitions.includes("CORE_CM4")));
+  const cm7Memory = await inspectMemoryArtifact({
+    artifactPath: path.join(build, "CM7", "firmware_CM7.elf"), core: "CM7",
+    linkerPath: path.join(root, "CM7", "stm32h755xx_flash_CM7.ld"), objdumpPath: objdump,
+    cwd: root, trusted: true,
+  }, runProcess);
+  const cm4Memory = await inspectMemoryArtifact({
+    artifactPath: path.join(build, "CM4", "firmware_CM4.elf"), core: "CM4",
+    linkerPath: path.join(root, "CM4", "stm32h755xx_flash_CM4.ld"), objdumpPath: objdump,
+    cwd: root, trusted: true,
+  }, runProcess);
+  assert.equal(cm7Memory.status, "available", `${cm7Memory.message} ${cm7Memory.warnings.join(" ")}`);
+  assert.equal(cm4Memory.status, "available", `${cm4Memory.message} ${cm4Memory.warnings.join(" ")}`);
+  assert.equal(cm7Memory.regions.find(region => region.name === "FLASH").origin, 0x08000000);
+  assert.equal(cm4Memory.regions.find(region => region.name === "FLASH").origin, 0x08100000);
+  assert.ok(cm7Memory.flashLoadBytes > 0 && cm4Memory.flashLoadBytes > 0);
+  assert.equal(cm7Memory.core, "CM7");
+  assert.equal(cm4Memory.core, "CM4");
 });
 
 test("CubeMX ExternalProject builds both cores with inherited Ninja PATH and arbitrary binary directories", async t => {

@@ -51,13 +51,17 @@ QC1 lance une configuration temporaire `cortex-debug` avec `servertype: openocd`
 
 Le debug requiert Cortex-Debug, OpenOCD, GDB ARM, l'ELF du cœur et une sonde vérifiée. La détection de l'extension seule ne prouve pas que GDB et OpenOCD démarrent.
 
+## Inspection mémoire statique
+
+La page Build / Flash / Debug analyse les ELF présents sans connexion au MCU. Les sections et régions sont lues avec `arm-none-eabi-objdump` et les cartes/scripts linker disponibles; les estimations sont séparées par image et, sur H7, par cœur. La date de l'ELF est affichée comme indice de provenance; elle ne prouve pas qu'il provient du dernier build. Les mesures runtime de pile et de heap ne sont pas disponibles. Voir [Inspection mémoire statique](MEMORY_INSPECTION.md) pour les sources, calculs et limites.
+
 ## Réglages d'outils
 
 - `qc1.cmakePath`, `qc1.compilerPath`, `qc1.openocdPath` : chemins explicites; vide = découverte.
 - `qc1.stlinkPath` : chemin de `st-info` utilisé pour inventaire des numéros de série.
 - `qc1.buildDirectory`, `qc1.buildType`, `qc1.cmakePreset` : emplacement, type et preset.
 - `qc1.elfPath`, `qc1.cm7ElfPath`, `qc1.cm4ElfPath` : choix manuel d'artefacts ambigus.
-- `qc1.toolPaths` : autres outils référencés par le projet.
+- `qc1.toolPaths` : autres outils référencés par le projet, dont `arm-none-eabi-objdump` si un chemin explicite est nécessaire.
 - `qc1.cubeH7Path` : racine locale STM32CubeH7 contenant `Drivers/`; aucun téléchargement automatique n'est lancé.
 
 Les chemins relatifs d'outils sont résolus contre le projet actif. Les presets CMake sont réévalués après sélection du projet.

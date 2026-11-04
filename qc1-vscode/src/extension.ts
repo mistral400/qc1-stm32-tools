@@ -107,6 +107,7 @@ import { ProjectDiscoveryController } from "./qc1/projectDiscoveryController";
 import { ProjectConfigurationController, ProjectSettingsInput, projectWriteTarget, assertOperationConfiguration } from "./qc1/projectConfiguration";
 import { RecentProjectsController, directoryAvailable } from "./qc1/recentProjectsController";
 import { collectProjectArtifacts } from "./qc1/projectArtifacts";
+import { inspectMemoryArtifact, memoryToolPath, summarizeMemoryInspection } from "./qc1/memoryInspection";
 import { normalizeTools } from "./dashboard/managerUiState";
 import { parseWebviewMessage, qc1Commands } from "./dashboard/webviewMessages";
 import { isFlashFullyConfirmed, ProjectOperationHistory, projectOperationKey, QC1ProjectOperationSnapshot, setOperationResult } from "./qc1/operationHistory";
@@ -1700,6 +1701,7 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
   private settingsUpdating = 0;
   private selectionGeneration = 0;
   private artifactGeneration = 0;
+  private memoryInspectionController?: AbortController;
   private contextGeneration = 0;
   private refreshTimer?: ReturnType<typeof setTimeout>;
   private readonly disposables: vscode.Disposable[] = [];
@@ -1812,6 +1814,9 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
   private scheduleContextRefresh(clearResults = false): void {
     projectCache.clear();
     ++this.contextGeneration;
+    ++this.artifactGeneration;
+    this.memoryInspectionController?.abort();
+    this.memoryInspectionController = undefined;
     this.discovery.invalidate(clearResults);
     clearTimeout(this.refreshTimer);
     this.refreshTimer = setTimeout(() => {
@@ -1834,6 +1839,7 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
           operations: createInitialOperationStates(),
         }),
         artifacts: [],
+        memoryInspection: { status: "idle", message: "Sélection du projet modifiée; inspection à actualiser.", images: [] },
       };
       this.discovery.setSelectedPath(status.projectPath);
       this.watchProject(status.projectPath);
@@ -1876,13 +1882,66 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
 
   private async refreshArtifacts(): Promise<void> {
     const id = ++this.artifactGeneration;
+    this.memoryInspectionController?.abort();
+    const memoryController = new AbortController();
+    this.memoryInspectionController = memoryController;
     const status = getQc1Status(this.context);
     const artifacts = await collectProjectArtifacts(status.buildPath, [
       { path: status.elfPath }, { path: status.binPath },
       { path: status.cm7ElfPath, core: "CM7" }, { path: status.cm4ElfPath, core: "CM4" },
     ]);
     if (this.disposed || id !== this.artifactGeneration || status.projectPath !== getQc1Status(this.context).projectPath) return;
-    dashboardState = { ...dashboardState, artifacts };
+    const elfArtifacts = artifacts.filter(artifact => artifact.kind === "ELF");
+    const artifactPathKey = (file: string): string => {
+      const resolved = path.resolve(file);
+      return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    };
+    const candidates: Array<{ artifactPath: string; core: "STM32" | "CM7" | "CM4" | "Inconnu"; linkerPath: string }> = [];
+    const addCandidate = (artifactPath: string, core: "STM32" | "CM7" | "CM4" | "Inconnu", linkerPath: string): void => {
+      const artifact = elfArtifacts.find(item => artifactPathKey(item.path) === artifactPathKey(artifactPath));
+      if (!artifact || candidates.some(item => artifactPathKey(item.artifactPath) === artifactPathKey(artifact.path))) return;
+      candidates.push({ artifactPath: artifact.path, core, linkerPath });
+    };
+    if (isStm32H7Family(status.architecture.family)) {
+      addCandidate(status.cm7ElfPath, "CM7", status.architecture.cm7.linkerScriptPath);
+      addCandidate(status.cm4ElfPath, "CM4", status.architecture.cm4.linkerScriptPath);
+      for (const artifact of elfArtifacts) {
+        if (artifact.core === "CM7") addCandidate(artifact.path, "CM7", status.architecture.cm7.linkerScriptPath);
+        else if (artifact.core === "CM4") addCandidate(artifact.path, "CM4", status.architecture.cm4.linkerScriptPath);
+      }
+      if (!candidates.length && elfArtifacts.length === 1) {
+        const core = status.architecture.coreMode === "cm7" ? "CM7"
+          : status.architecture.coreMode === "cm4" ? "CM4" : "Inconnu";
+        const linker = core === "CM7" ? status.architecture.cm7.linkerScriptPath
+          : core === "CM4" ? status.architecture.cm4.linkerScriptPath : "";
+        addCandidate(elfArtifacts[0].path, core, linker);
+      }
+    } else {
+      addCandidate(status.elfPath, status.architecture.family === "unknown" ? "Inconnu" : "STM32", status.linkerScriptPath);
+      if (!candidates.length && elfArtifacts.length === 1)
+        addCandidate(elfArtifacts[0].path, status.architecture.family === "unknown" ? "Inconnu" : "STM32", status.linkerScriptPath);
+    }
+
+    const env = getExecutionEnv(status);
+    const toolPaths = qc1Configuration().get<Record<string, string>>("toolPaths", {});
+    const configuredObjdump = toolPaths["arm-none-eabi-objdump"]?.trim();
+    const objdumpPath = configuredObjdump
+      ? resolveExecutable(resolveUserPath(configuredObjdump, status.projectPath), env) || resolveExecutable(configuredObjdump, env)
+      : memoryToolPath(status.compilerOk ? status.compilerPath : "", process.platform, env);
+    const images = await Promise.all(candidates.slice(0, 2).map(candidate => {
+      const siblingMap = path.join(path.dirname(candidate.artifactPath), `${path.basename(candidate.artifactPath, path.extname(candidate.artifactPath))}.map`);
+      const coreMap = artifacts.find(item => item.kind === "MAP" && item.core === candidate.core && artifactPathKey(path.dirname(item.path)) === artifactPathKey(path.dirname(candidate.artifactPath)))?.path;
+      const firmwareMap = path.join(path.dirname(candidate.artifactPath), "firmware.map");
+      const mapPath = coreMap || (fs.existsSync(siblingMap) ? siblingMap : fs.existsSync(firmwareMap) ? firmwareMap : siblingMap);
+      return inspectMemoryArtifact({
+        ...candidate, mapPath, objdumpPath, cwd: status.projectPath, env, trusted: vscode.workspace.isTrusted,
+        signal: memoryController.signal,
+      });
+    }));
+    const memoryInspection = summarizeMemoryInspection(images);
+    if (this.disposed || id !== this.artifactGeneration || status.projectPath !== getQc1Status(this.context).projectPath) return;
+    this.memoryInspectionController = undefined;
+    dashboardState = { ...dashboardState, artifacts, memoryInspection };
     this.sendDashboardState();
   }
 
@@ -1920,6 +1979,8 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
 
   dispose(): void {
     this.disposed = true;
+    this.memoryInspectionController?.abort();
+    this.memoryInspectionController = undefined;
     clearTimeout(this.refreshTimer);
     clearTimeout(this.serialFlushTimer);
     this.discovery.dispose();
@@ -1950,8 +2011,6 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
       hasFlashFailed: false,
       elfGenerated: dashboardState.build.elfGenerated,
       binGenerated: dashboardState.build.binGenerated,
-      flashUsage: dashboardState.build.flashUsage || "--",
-      ramUsage: dashboardState.build.ramUsage || "--",
       diagnostics: [],
       explanation: "Aucune erreur connue détectée."
     });
@@ -3336,8 +3395,6 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
           buildRuntimeMs: Math.max(0, (buildFinishedAt || operationCompletedAt) - (operationSnapshot.operations.build.startedAt || operationStartedAt)),
           errors: buildParsed.errors,
           warnings: buildParsed.warnings,
-          flashUsage: buildParsed.flashUsage,
-          ramUsage: buildParsed.ramUsage,
           elfGenerated: buildParsed.elfGenerated,
           binGenerated: buildParsed.binGenerated,
         },
@@ -3543,8 +3600,6 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
       hasFlashFailed: false,
       elfGenerated: dashboardState.build.elfGenerated,
       binGenerated: dashboardState.build.binGenerated,
-      flashUsage: dashboardState.build.flashUsage || "--",
-      ramUsage: dashboardState.build.ramUsage || "--",
       diagnostics: [{
         severity: level,
         message: qc1Error.message,
@@ -3596,8 +3651,6 @@ export class QC1PanelProvider implements vscode.WebviewViewProvider {
       hasFlashFailed: false,
       elfGenerated: false,
       binGenerated: false,
-      flashUsage: "--",
-      ramUsage: "--",
       diagnostics: [],
       explanation: "Aucune erreur connue détectée."
     });

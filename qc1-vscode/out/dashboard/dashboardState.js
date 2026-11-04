@@ -51,6 +51,7 @@ exports.defaultDashboardState = {
     tools: [],
     diagnostics: [],
     artifacts: [],
+    memoryInspection: { status: "idle", message: "Inspection mémoire non lancée.", images: [] },
     operationHistory: [],
     hardwareSessions: [],
     currentAction: "Idle",
@@ -81,8 +82,6 @@ exports.defaultDashboardState = {
         buildRuntimeMs: 0,
         errors: 0,
         warnings: 0,
-        flashUsage: "--",
-        ramUsage: "--",
         elfGenerated: false,
         binGenerated: false
     },
@@ -127,7 +126,7 @@ exports.defaultDashboardState = {
     environment: {
         os: getOsLabel(process.platform),
         osRaw: process.platform,
-        extensionVersion: "0.3.1",
+        extensionVersion: "0.5.0",
         cmakePath: "--",
         cmakeSourcePath: "--",
         buildPath: "--",

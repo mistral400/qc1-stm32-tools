@@ -14,6 +14,7 @@ flowchart LR
   HOST --> REPORT[diagnosticReport]
   HOST --> UART[serialMonitor / serialPlotProtocol]
   HOST --> HISTORY[operationTimeline / diagnosticGuidance]
+  HOST --> MEMORY[memoryInspection]
   HOST --> STATE[dashboardState]
   STATE --> UI
   STATE --> TREEMODEL[dashboardTreeModel]
@@ -33,6 +34,7 @@ flowchart LR
 | Interface | `src/dashboard/` | État typé, rendu échappé, client statique, styles, projection TreeView et contrat de messages |
 | Rapports | `diagnosticReport.ts`, `systemInspection.ts`, `extensionInventory.ts` | Rapport versionné et anonymisation des données collectées |
 | UART, historique et aide | `serialMonitor.ts`, `serialPlotProtocol.ts`, `operationTimeline.ts`, `diagnosticGuidance.ts` | Transport série injecté/testable, protocole de graphe explicite et borné, résumé d'opérations expurgé, étapes manuelles de dépannage |
+| Inspection mémoire statique | `memoryInspection.ts` | Lecture ELF `objdump -h`, régions linker, mesures Flash/RAM statique et attribution CM7/CM4 sans connexion MCU |
 | Moteur F1 intégré | `resources/cmake/` | Projet CMake/Ninja et toolchain ARM intégrés pour STM32F1 |
 
 ## Flux de commande
@@ -61,6 +63,8 @@ La découverte a une génération, une annulation et des résultats obsolètes i
 `dashboardState` dans l'hôte reste l'unique source de vérité métier. `dashboardTreeModel.ts` en produit une projection en lecture seule; les sélections de candidats/récents sont revalidées par `QC1PanelProvider`. Les Webviews de la barre latérale et de l'éditeur reçoivent les mêmes mises à jour et utilisent le même routeur de messages. Elles ne conservent que leur navigation et les champs de formulaire non enregistrés. Le terminal QC1 est réhydraté depuis le tampon borné partagé lorsque le dashboard éditeur est ouvert ou réouvert.
 
 Le moniteur UART utilise `SerialMonitorService`, dont la fabrique de ports et l'énumérateur sont injectables. Le module charge `serialport` à la demande; les délais d'ouverture et d'écriture, le TX et les buffers UI sont bornés. Le graphique consomme seulement JSON Lines versionné, puis `BoundedSerialPlotHistory` conserve 1 000 échantillons et au plus huit séries. `OperationTimeline` conserve au plus 200 résumés expurgés dans `globalState`; l'historique brut UART et les commandes brutes n'y sont jamais copiés. Les guides de diagnostic sont des étapes manuelles sélectionnées selon des codes/messages connus; ils ne réparent pas le système automatiquement.
+
+`memoryInspection.ts` lit les en-têtes des ELF connus au rafraîchissement des artefacts, et rapproche leurs adresses VMA/LMA des régions déclarées dans une carte ou un script linker. L'inspection est désactivée dans un workspace non approuvé; le processus `objdump` est sans shell, borné et limité à la lecture. Chaque ELF CM7/CM4 reste séparé. Le rapport ne déduit aucune capacité MCU et ne prétend pas mesurer la pile, le heap ou la RAM à l'exécution; voir [Inspection mémoire statique](MEMORY_INSPECTION.md).
 
 ## Principes de sécurité
 

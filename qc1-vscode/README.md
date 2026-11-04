@@ -48,6 +48,10 @@ L'extension Embedded Build Tools peut demander de télécharger sa toolchain qua
 
 Les commandes sont aussi accessibles depuis la palette VS Code avec `Cmd+Shift+P` sur macOS ou `Ctrl+Shift+P` sur Windows/Linux.
 
+## Inspection mémoire statique
+
+La page **Build / Flash / Debug** analyse les ELF présents avec `arm-none-eabi-objdump`, sans se connecter au MCU. Elle estime les sections chargées en Flash à partir des adresses LMA et la RAM statique à partir des sections placées en RAM; les régions déclarées par le linker sont affichées avec leurs capacités quand elles sont numériques. Les images CM7 et CM4 restent séparées. La pile, le heap et leur consommation à l'exécution ne sont pas mesurés; la date d'un ELF ne prouve pas qu'il provient du dernier build. Voir [Inspection mémoire statique](docs/MEMORY_INSPECTION.md).
+
 ## Moniteur UART et graphique
 
 Dans **Outils**, actualise les ports, sélectionne le port relié à la carte et règle le baud rate, les bits, la parité, les bits d'arrêt et le contrôle RTS/CTS. Le moniteur accepte un envoi texte UTF-8 ou HEX, avec ajout CRLF facultatif. La réception s'affiche en ASCII échappé ou en HEX; les horodatages et l'enregistrement du journal sont facultatifs. QC1 ne sauvegarde pas automatiquement le trafic série. L'accès aux ports exige un workspace approuvé.
@@ -77,6 +81,7 @@ Le diagnostic matériel n'est pas une preuve de build, de flash, de vérificatio
 - [Gestion multi-projet](docs/MULTI_PROJECT.md)
 - [Diagnostics et rapports](docs/DIAGNOSTICS.md)
 - [Moniteur UART](docs/UART.md)
+- [Inspection mémoire statique](docs/MEMORY_INSPECTION.md)
 - [Tests reproductibles](docs/TESTING.md)
 - [Matrice de compatibilité](docs/COMPATIBILITY_MATRIX.md)
 - [Préparation Marketplace](docs/MARKETPLACE_READINESS.md)

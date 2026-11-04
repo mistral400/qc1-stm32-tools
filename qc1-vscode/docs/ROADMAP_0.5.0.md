@@ -43,7 +43,7 @@ Les deux tests ignorés nécessitent `QC1_CUBE_H7_PATH` (installation locale STM
 
 ## État de travail
 
-Inspection et baseline terminées. Jalons 0.4.1 à 0.4.6 sont validés et checkpointés. Le jalon 0.4.7 est validé localement et empaqueté; aucune validation matérielle ou visuelle multiplateforme n'a été faite. Prochain jalon : **0.5.0 — inspection statique ELF/MAP Flash/RAM et stabilisation intégrée**.
+Inspection et baseline terminées. Jalons 0.4.1 à 0.4.7 sont validés et checkpointés localement. Le jalon **0.5.0 — inspection statique ELF/MAP Flash/RAM et stabilisation intégrée** est validé localement et empaqueté. Aucune validation matérielle, inspection visuelle ni validation Windows/Linux n'a été faite; aucun CI distant n'a été exécuté.
 
 ### Jalon validé et checkpointé localement — 0.4.1
 
@@ -121,3 +121,13 @@ Inspection et baseline terminées. Jalons 0.4.1 à 0.4.6 sont validés et checkp
 - Packaging PASS : `qc1-stm32-tools-0.4.7.vsix` (326 fichiers, 1,42 MB), `unzip -t` PASS, SHA-256 `328e4f585782701da031d5a8982c23923cc6f30e33be6ee654b4f3ab346efc85`. `vsce` conseille le bundling pour performance; les dépendances runtime sont actuellement incluses telles quelles.
 - Installation VSIX dans un profil temporaire PASS. VS Code y a aussi résolu automatiquement les extensions déclarées dans `extensionPack`; elles et les données de ce profil restent confinées à `/tmp`.
 - Aucun test matériel, aucune validation visuelle des pages, aucun test réel de port UART sur Windows/Linux, aucune CI distante ni publication. Tag/commit local avant de démarrer 0.5.0.
+
+### Jalon validé et empaqueté localement — 0.5.0
+
+- `src/qc1/memoryInspection.ts` inspecte les sections ELF avec `arm-none-eabi-objdump -h`, et utilise le linker script ainsi que la configuration Memory du fichier MAP pour calculer le Flash chargé et la RAM statique par région déclarée. Les réservations linker heap/stack sont séparées si elles existent; aucune utilisation runtime n'est déduite. Les images H7 CM7/CM4 restent séparées.
+- Les données sont associées à l'ELF candidat du projet courant, vérifiées contre les régions connues et présentées avec leur provenance et leurs limites. Les données antérieures au binaire, les capacités inconnues, les conflits de régions et les discordances ELF/MAP/linker sont signalés plutôt que complétés par des capacités supposées. La page Build/Flash/Debug expose les métriques et avertissements; les heuristiques de taille provenant des anciens logs sont retirées.
+- Tests logiciels locaux : `npm test` PASS (207 réussis, 2 ignorés, 209 total), `npm run typecheck` PASS, `npm run lint` PASS, `npm audit --omit=dev` PASS (0 vulnérabilité), `git diff --check` PASS. Les tests ignorés restent GPIO_Demo sans `QC1_CUBE_H7_PATH` et ExternalProject sans CMake/Ninja/ARM GNU dans le fixture.
+- Les tests d'intégration ELF construisent et inspectent en copie temporaire un STM32F103 ainsi que les images distinctes H755 CM7/CM4. Ce sont des preuves logicielles, sans connexion ni commande adressée à une carte.
+- Packaging local PASS : `qc1-stm32-tools-0.5.0.vsix` (329 fichiers, 1,44 MB); `unzip -t` PASS; version 0.5.0 du manifeste vérifiée. `vsce` signale que le bundling pourrait améliorer la performance de chargement. L'empreinte SHA-256 est fournie dans le compte rendu final de livraison.
+- Smoke d'activation du VSIX dans un profil temporaire : PASS, VS Code 1.145.0 / macOS arm64, activation `workspaceContains:CMakeLists.txt` observée dans le journal sans erreur QC1. Aucun test visuel n'a été réalisé.
+- Aucune validation matérielle, aucun reset/flash, aucune validation sur Windows/Linux, aucun CI distant ni publication Marketplace. Le smoke d'activation ne prouve pas le rendu visuel ni le comportement sur d'autres plateformes.

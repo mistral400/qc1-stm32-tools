@@ -4,11 +4,13 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const { resolveExecutable, runProcess } = require("../out/qc1/processTools");
+const { inspectMemoryArtifact } = require("../out/qc1/memoryInspection");
 
 test("bundled STM32F1 CMake performs a real ARM build", async (t) => {
   const cmake = resolveExecutable("cmake");
   const gcc = resolveExecutable("arm-none-eabi-gcc");
-  if (!cmake || !gcc) { t.skip("CMake or Arm GNU Toolchain not installed"); return; }
+  const objdump = resolveExecutable("arm-none-eabi-objdump");
+  if (!cmake || !gcc || !objdump) { t.skip("CMake or complete Arm GNU Toolchain not installed"); return; }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "qc1-f1-build-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const source = path.join(root, "Src");
@@ -37,4 +39,14 @@ test("bundled STM32F1 CMake performs a real ARM build", async (t) => {
   const compilation = await runProcess(cmake, ["--build", build, "--parallel"], { timeoutMs: 60000 });
   assert.equal(compilation.exitCode, 0, compilation.stderr || compilation.error);
   for (const extension of ["elf", "bin", "hex", "map"]) assert.ok(fs.existsSync(path.join(build, `firmware.${extension}`)), extension);
+  const memory = await inspectMemoryArtifact({
+    artifactPath: path.join(build, "firmware.elf"), core: "STM32", linkerPath: linker,
+    mapPath: path.join(build, "firmware.map"), objdumpPath: objdump, cwd: root, trusted: true,
+  }, runProcess);
+  assert.equal(memory.status, "available", `${memory.message} ${memory.warnings.join(" ")}`);
+  assert.ok(memory.flashLoadBytes > 0);
+  assert.equal(memory.staticRamBytes, 0);
+  assert.ok(memory.textBytes > 0);
+  assert.ok(memory.regions.some(region => region.name === "FLASH" && region.usedBytes > 0));
+  assert.ok(memory.regions.some(region => region.name === "RAM" && region.length === 20 * 1024));
 });

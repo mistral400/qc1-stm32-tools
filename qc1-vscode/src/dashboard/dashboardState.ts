@@ -20,6 +20,7 @@ import type { ProjectUiState } from "./projectUiState";
 import type { RecentProject } from "../qc1/recentProjectsController";
 import type { ToolUiState, ArtifactUiState } from "./managerUiState";
 import type { Qc1OperationTimelineEntry } from "../qc1/operationTimeline";
+import type { MemoryInspectionReport } from "../qc1/memoryInspection";
 
 // Valeurs de couleur/gravité utilisées pour choisir le style d'un diagnostic.
 export type QC1StatusLevel =
@@ -61,9 +62,6 @@ export interface QC1BuildStatus {
 
   errors: number;
   warnings: number;
-
-  flashUsage?: string;
-  ramUsage?: string;
 
   elfGenerated: boolean;
   binGenerated: boolean;
@@ -204,6 +202,7 @@ export interface DashboardState {
   tools: ToolUiState[];
   diagnostics: QC1Diagnostic[];
   artifacts: ArtifactUiState[];
+  memoryInspection: MemoryInspectionReport;
   operationHistory: Qc1OperationTimelineEntry[];
 }
 
@@ -227,6 +226,7 @@ export const defaultDashboardState: DashboardState = {
   tools: [],
   diagnostics: [],
   artifacts: [],
+  memoryInspection: { status: "idle", message: "Inspection mémoire non lancée.", images: [] },
   operationHistory: [],
   hardwareSessions: [],
   currentAction: "Idle",
@@ -262,9 +262,6 @@ export const defaultDashboardState: DashboardState = {
 
     errors: 0,
     warnings: 0,
-
-    flashUsage: "--",
-    ramUsage: "--",
 
     elfGenerated: false,
     binGenerated: false
@@ -322,7 +319,7 @@ export const defaultDashboardState: DashboardState = {
     os: getOsLabel(process.platform),
     osRaw: process.platform,
 
-    extensionVersion: "0.3.1",
+    extensionVersion: "0.5.0",
     cmakePath: "--",
     cmakeSourcePath: "--",
     buildPath: "--",

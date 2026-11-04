@@ -79,6 +79,30 @@ test("single-core H7 keeps its flash and debug actions in the visible secondary 
   assert.match(html, /class="action-secondary" data-action="command" data-command="debug-cm7"/);
 });
 
+test("memory panel distinguishes ELF static usage from runtime stack and heap measurements", () => {
+  const state = stateFor("STM32H7");
+  state.memoryInspection = {
+    status: "available",
+    message: "Inspection statique disponible.",
+    images: [{
+      core: "CM7", status: "available", artifactPath: "/tmp/CM7.elf", message: "Sections ELF lues.",
+      regionSource: "carte linker", flashLoadBytes: 4096, staticRamBytes: 512,
+      textBytes: 4096, dataBytes: 128, bssBytes: 384, otherRamBytes: 0, runtimeReservationBytes: 256,
+      sections: [{ name: ".text", sizeBytes: 4096, vma: 0x08000000, lma: 0x08000000, flags: ["ALLOC", "LOAD"], kind: "text", runtimeReservation: false }],
+      regions: [{ name: "FLASH", origin: 0x08000000, length: 1024 * 1024, kind: "flash", usedBytes: 4096, utilizationPercent: 0.4, overflow: false }],
+      warnings: [],
+    }],
+  };
+  const html = renderBuildView(state);
+  assert.match(html, /Inspection mémoire statique/);
+  assert.match(html, /RAM statique/);
+  assert.match(html, /La pile, le heap et leur consommation à l'exécution ne sont pas mesurés/);
+  assert.match(html, /ne prouve pas qu'ils proviennent du dernier build réussi/);
+  assert.match(html, /CM7/);
+  assert.match(html, /carte linker/);
+  assert.doesNotMatch(html, /Flash utilisée \(sortie du build\)/);
+});
+
 test("dashboard styles define compact, reduced-motion and forced-colors behavior", () => {
   assert.match(dashboardStyles, /max-width: 400px/);
   assert.match(dashboardStyles, /max-width: 600px/);

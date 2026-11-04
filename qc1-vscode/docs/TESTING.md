@@ -1,5 +1,26 @@
 # Tests reproductibles
 
+## Exécution locale 0.5.0 — 4 novembre 2026
+
+| Gate | Résultat |
+| --- | --- |
+| `npm test` | PASS — 207 réussis, 2 ignorés, 209 au total |
+| `npm run typecheck` | PASS |
+| `npm run lint` | PASS |
+| `npm audit --omit=dev` | PASS — 0 vulnérabilité de production |
+| `git diff --check` | PASS |
+| ELF F103 | PASS — build temporaire ARM réel puis `objdump`/sections/régions via l'inspection mémoire QC1 |
+| ELF H755 CM7/CM4 | PASS — deux images temporaires réelles analysées séparément avec leurs linkers |
+| VSIX 0.5.0 | PASS — 329 fichiers, intégrité ZIP vérifiée |
+| Installation/activation VS Code | PASS — VS Code 1.145.0 arm64, profil temporaire, `workspaceContains:CMakeLists.txt` |
+| CI distante | NON EFFECTUÉE |
+| Rendu visuel multiplateforme | NON EFFECTUÉ |
+| Flash, reset, UART physique ou lecture matérielle | NON EFFECTUÉS |
+
+Les tests mémoire combinent des sorties `objdump` simulées (timeout, annulation, sortie tronquée, régions inconnues, dépassement, carte obsolète/incohérente) avec des ELF F103/H755 temporaires construits localement. Ils n'accèdent à aucune sonde et ne valident pas le contenu d'une carte réelle. Les deux tests ignorés dépendent de l'installation locale STM32CubeH7/GPIO_Demo et de CMake/Ninja/ARM GNU pour `ExternalProject`.
+
+L'installation et l'activation ont été faites dans `/tmp` avec workspace trust désactivé uniquement pour ce profil temporaire; la fixture contenait seulement `CMakeLists.txt`. L'extension pack VS Code a également été installé dans le dossier d'extensions temporaire.
+
 ## Commandes depuis `qc1-vscode/`
 
 ```sh

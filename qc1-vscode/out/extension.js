@@ -72,6 +72,7 @@ const projectDiscoveryController_1 = require("./qc1/projectDiscoveryController")
 const projectConfiguration_1 = require("./qc1/projectConfiguration");
 const recentProjectsController_1 = require("./qc1/recentProjectsController");
 const projectArtifacts_1 = require("./qc1/projectArtifacts");
+const memoryInspection_1 = require("./qc1/memoryInspection");
 const managerUiState_1 = require("./dashboard/managerUiState");
 const webviewMessages_1 = require("./dashboard/webviewMessages");
 const operationHistory_1 = require("./qc1/operationHistory");
@@ -1583,6 +1584,9 @@ class QC1PanelProvider {
     scheduleContextRefresh(clearResults = false) {
         projectCache.clear();
         ++this.contextGeneration;
+        ++this.artifactGeneration;
+        this.memoryInspectionController?.abort();
+        this.memoryInspectionController = undefined;
         this.discovery.invalidate(clearResults);
         clearTimeout(this.refreshTimer);
         this.refreshTimer = setTimeout(() => {
@@ -1606,6 +1610,7 @@ class QC1PanelProvider {
                     operations: (0, dashboardState_1.createInitialOperationStates)(),
                 }),
                 artifacts: [],
+                memoryInspection: { status: "idle", message: "Sélection du projet modifiée; inspection à actualiser.", images: [] },
             };
             this.discovery.setSelectedPath(status.projectPath);
             this.watchProject(status.projectPath);
@@ -1652,6 +1657,9 @@ class QC1PanelProvider {
     }
     async refreshArtifacts() {
         const id = ++this.artifactGeneration;
+        this.memoryInspectionController?.abort();
+        const memoryController = new AbortController();
+        this.memoryInspectionController = memoryController;
         const status = getQc1Status(this.context);
         const artifacts = await (0, projectArtifacts_1.collectProjectArtifacts)(status.buildPath, [
             { path: status.elfPath }, { path: status.binPath },
@@ -1659,7 +1667,61 @@ class QC1PanelProvider {
         ]);
         if (this.disposed || id !== this.artifactGeneration || status.projectPath !== getQc1Status(this.context).projectPath)
             return;
-        dashboardState = { ...dashboardState, artifacts };
+        const elfArtifacts = artifacts.filter(artifact => artifact.kind === "ELF");
+        const artifactPathKey = (file) => {
+            const resolved = path.resolve(file);
+            return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+        };
+        const candidates = [];
+        const addCandidate = (artifactPath, core, linkerPath) => {
+            const artifact = elfArtifacts.find(item => artifactPathKey(item.path) === artifactPathKey(artifactPath));
+            if (!artifact || candidates.some(item => artifactPathKey(item.artifactPath) === artifactPathKey(artifact.path)))
+                return;
+            candidates.push({ artifactPath: artifact.path, core, linkerPath });
+        };
+        if ((0, targetArchitecture_1.isStm32H7Family)(status.architecture.family)) {
+            addCandidate(status.cm7ElfPath, "CM7", status.architecture.cm7.linkerScriptPath);
+            addCandidate(status.cm4ElfPath, "CM4", status.architecture.cm4.linkerScriptPath);
+            for (const artifact of elfArtifacts) {
+                if (artifact.core === "CM7")
+                    addCandidate(artifact.path, "CM7", status.architecture.cm7.linkerScriptPath);
+                else if (artifact.core === "CM4")
+                    addCandidate(artifact.path, "CM4", status.architecture.cm4.linkerScriptPath);
+            }
+            if (!candidates.length && elfArtifacts.length === 1) {
+                const core = status.architecture.coreMode === "cm7" ? "CM7"
+                    : status.architecture.coreMode === "cm4" ? "CM4" : "Inconnu";
+                const linker = core === "CM7" ? status.architecture.cm7.linkerScriptPath
+                    : core === "CM4" ? status.architecture.cm4.linkerScriptPath : "";
+                addCandidate(elfArtifacts[0].path, core, linker);
+            }
+        }
+        else {
+            addCandidate(status.elfPath, status.architecture.family === "unknown" ? "Inconnu" : "STM32", status.linkerScriptPath);
+            if (!candidates.length && elfArtifacts.length === 1)
+                addCandidate(elfArtifacts[0].path, status.architecture.family === "unknown" ? "Inconnu" : "STM32", status.linkerScriptPath);
+        }
+        const env = getExecutionEnv(status);
+        const toolPaths = qc1Configuration().get("toolPaths", {});
+        const configuredObjdump = toolPaths["arm-none-eabi-objdump"]?.trim();
+        const objdumpPath = configuredObjdump
+            ? (0, processTools_1.resolveExecutable)((0, filesystem_1.resolveUserPath)(configuredObjdump, status.projectPath), env) || (0, processTools_1.resolveExecutable)(configuredObjdump, env)
+            : (0, memoryInspection_1.memoryToolPath)(status.compilerOk ? status.compilerPath : "", process.platform, env);
+        const images = await Promise.all(candidates.slice(0, 2).map(candidate => {
+            const siblingMap = path.join(path.dirname(candidate.artifactPath), `${path.basename(candidate.artifactPath, path.extname(candidate.artifactPath))}.map`);
+            const coreMap = artifacts.find(item => item.kind === "MAP" && item.core === candidate.core && artifactPathKey(path.dirname(item.path)) === artifactPathKey(path.dirname(candidate.artifactPath)))?.path;
+            const firmwareMap = path.join(path.dirname(candidate.artifactPath), "firmware.map");
+            const mapPath = coreMap || (fs.existsSync(siblingMap) ? siblingMap : fs.existsSync(firmwareMap) ? firmwareMap : siblingMap);
+            return (0, memoryInspection_1.inspectMemoryArtifact)({
+                ...candidate, mapPath, objdumpPath, cwd: status.projectPath, env, trusted: vscode.workspace.isTrusted,
+                signal: memoryController.signal,
+            });
+        }));
+        const memoryInspection = (0, memoryInspection_1.summarizeMemoryInspection)(images);
+        if (this.disposed || id !== this.artifactGeneration || status.projectPath !== getQc1Status(this.context).projectPath)
+            return;
+        this.memoryInspectionController = undefined;
+        dashboardState = { ...dashboardState, artifacts, memoryInspection };
         this.sendDashboardState();
     }
     rememberProjectOperationSnapshot(projectPath, snapshot, publish = false) {
@@ -1696,6 +1758,8 @@ class QC1PanelProvider {
     }
     dispose() {
         this.disposed = true;
+        this.memoryInspectionController?.abort();
+        this.memoryInspectionController = undefined;
         clearTimeout(this.refreshTimer);
         clearTimeout(this.serialFlushTimer);
         this.discovery.dispose();
@@ -1724,8 +1788,6 @@ class QC1PanelProvider {
             hasFlashFailed: false,
             elfGenerated: dashboardState.build.elfGenerated,
             binGenerated: dashboardState.build.binGenerated,
-            flashUsage: dashboardState.build.flashUsage || "--",
-            ramUsage: dashboardState.build.ramUsage || "--",
             diagnostics: [],
             explanation: "Aucune erreur connue détectée."
         });
@@ -3172,8 +3234,6 @@ class QC1PanelProvider {
                     buildRuntimeMs: Math.max(0, (buildFinishedAt || operationCompletedAt) - (operationSnapshot.operations.build.startedAt || operationStartedAt)),
                     errors: buildParsed.errors,
                     warnings: buildParsed.warnings,
-                    flashUsage: buildParsed.flashUsage,
-                    ramUsage: buildParsed.ramUsage,
                     elfGenerated: buildParsed.elfGenerated,
                     binGenerated: buildParsed.binGenerated,
                 },
@@ -3335,8 +3395,6 @@ class QC1PanelProvider {
             hasFlashFailed: false,
             elfGenerated: dashboardState.build.elfGenerated,
             binGenerated: dashboardState.build.binGenerated,
-            flashUsage: dashboardState.build.flashUsage || "--",
-            ramUsage: dashboardState.build.ramUsage || "--",
             diagnostics: [{
                     severity: level,
                     message: qc1Error.message,
@@ -3382,8 +3440,6 @@ class QC1PanelProvider {
             hasFlashFailed: false,
             elfGenerated: false,
             binGenerated: false,
-            flashUsage: "--",
-            ramUsage: "--",
             diagnostics: [],
             explanation: "Aucune erreur connue détectée."
         });

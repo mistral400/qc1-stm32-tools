@@ -129,6 +129,13 @@ button.action-quiet:hover:not(:disabled) { background: var(--vscode-list-hoverBa
 .action-group { min-width: 0; }
 .eyebrow { color: var(--qc1-muted); font-size: 11px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
 .advanced-actions, .operation-details { margin-top: 8px; border-top: 1px solid var(--qc1-border); }
+.memory-image { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--qc1-border); }
+.memory-image h3 { margin: 6px 0; font-size: 13px; }
+.memory-region { margin-top: 6px; overflow-wrap: anywhere; }
+.memory-region .progress-track { margin: 4px 0 8px; }
+.memory-region .progress-track > div { height: 100%; background: var(--vscode-progressBar-background, var(--qc1-focus)); }
+.memory-warnings { color: var(--vscode-editorWarning-foreground, #eab568); }
+.memory-details { margin-top: 8px; border-top: 1px solid var(--qc1-border); }
 summary { min-height: 28px; padding: 5px 0; color: var(--vscode-textLink-foreground, var(--qc1-fg)); cursor: pointer; }
 .candidate, .recent, .tool, .diagnostic, .artifact { padding: 10px 0; border-top: 1px solid var(--qc1-border); }
 .scan-status.busy::before { content: "◌ "; color: var(--vscode-progressBar-background, var(--qc1-focus)); }

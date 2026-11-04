@@ -22,6 +22,48 @@ function operationRow(label: string, operation: DashboardState["operations"]["bu
   return `<div class="row"><span class="muted">${escapeHtml(label)}</span><span class="value operation-state ${statusClass}">${escapeHtml(operationSummary(operation))}</span></div>`;
 }
 
+function byteValue(value: number | undefined): string {
+  return value === undefined ? "Non déterminé" : `${value.toLocaleString("fr-CA")} octets`;
+}
+
+function renderMemoryInspection(state: DashboardState): string {
+  const report = state.memoryInspection;
+  const images = report.images.map(image => {
+    const summary = `<div class="row"><span class="muted">Flash chargée</span><span class="value">${escapeHtml(byteValue(image.flashLoadBytes))}</span></div>
+      <div class="row"><span class="muted">RAM statique</span><span class="value">${escapeHtml(byteValue(image.staticRamBytes))}</span></div>
+      <div class="row"><span class="muted">Sections .text / .data / .bss</span><span class="value">${escapeHtml(byteValue(image.textBytes))} / ${escapeHtml(byteValue(image.dataBytes))} / ${escapeHtml(byteValue(image.bssBytes))}</span></div>
+      <div class="row"><span class="muted">Autres sections RAM</span><span class="value">${escapeHtml(byteValue(image.otherRamBytes))}</span></div>
+      <div class="row"><span class="muted">Réservations linker heap/stack détectées</span><span class="value">${escapeHtml(byteValue(image.runtimeReservationBytes))}</span></div>`;
+    const regions = image.regions.map(region => {
+      const capacity = region.length === undefined ? "capacité inconnue" : `${region.length.toLocaleString("fr-CA")} octets`;
+      const used = region.usedBytes === undefined ? "occupation inconnue" : `${region.usedBytes.toLocaleString("fr-CA")} octets`;
+      const ratio = region.utilizationPercent === undefined ? "" : ` · ${region.utilizationPercent}%`;
+      const overflow = region.overflow ? " · dépassement détecté" : "";
+      const bar = region.utilizationPercent === undefined ? "" : `<div class="progress-track" role="img" aria-label="${escapeHtml(region.name)}: ${region.utilizationPercent}%"><div style="width:${Math.max(0, Math.min(region.utilizationPercent, 100))}%"></div></div>`;
+      return `<div class="memory-region"><div class="row"><strong>${escapeHtml(region.name)}</strong><span class="value ${region.overflow ? "error" : ""}">${escapeHtml(used)} / ${escapeHtml(capacity)}${escapeHtml(ratio + overflow)}</span></div>${bar}</div>`;
+    }).join("");
+    const sections = image.sections.slice(0, 16).map(section => `<div class="row"><span class="muted">${escapeHtml(section.name)}${section.runtimeReservation ? " · réserve" : ""}</span><span class="value">${escapeHtml(section.sizeBytes.toLocaleString("fr-CA"))} octets</span></div>`).join("");
+    const warnings = image.warnings.map(warning => `<li>${escapeHtml(warning)}</li>`).join("");
+    const details = `<details class="memory-details"><summary>Sections et provenance ELF</summary>
+      <div class="path">ELF · ${escapeHtml(image.artifactPath)}</div>
+      ${image.modifiedAt ? `<div class="row"><span class="muted">ELF modifié</span><span class="value">${escapeHtml(image.modifiedAt)}</span></div>` : ""}
+      ${image.linkerPath ? `<div class="path">Script linker · ${escapeHtml(image.linkerPath)}</div>` : ""}
+      ${image.mapPath ? `<div class="path">Carte linker détectée · ${escapeHtml(image.mapPath)}</div>` : ""}
+      ${image.regionSource ? `<div class="row"><span class="muted">Régions lues dans</span><span class="value">${escapeHtml(image.regionSource)}</span></div>` : ""}
+      ${sections || "<p class=\"muted\">Aucune section allouée reconnue.</p>"}
+      ${image.sections.length > 16 ? `<p class="muted">${image.sections.length - 16} autres sections restent dans l'ELF.</p>` : ""}</details>`;
+    return `<article class="memory-image"><h3>${escapeHtml(image.core)} · ${escapeHtml(image.status === "available" ? "Inspection disponible" : image.status === "error" ? "Erreur d'inspection" : "Inspection indisponible")}</h3>
+      <p class="muted">${escapeHtml(image.message)}</p>${summary}${regions ? `<div class="memory-regions"><strong>Régions déclarées</strong>${regions}</div>` : ""}
+      ${warnings ? `<ul class="memory-warnings">${warnings}</ul>` : ""}${details}</article>`;
+  }).join("");
+  return `<section class="card memory-inspection"><h2>Inspection mémoire statique</h2>
+    <p class="muted">${escapeHtml(report.message)}</p>
+    <p class="muted">Flash estimée depuis les adresses de chargement ELF; RAM statique depuis les sections placées en RAM. La pile, le heap et leur consommation à l'exécution ne sont pas mesurés.</p>
+    <p class="muted">L'analyse porte sur les ELF actuellement présents; leur date de modification ne prouve pas qu'ils proviennent du dernier build réussi.</p>
+    <p class="muted">Les résultats CM7 et CM4 sont séparés et ne sont pas additionnés; des régions RAM peuvent être partagées.</p>
+    ${images || "<p class=\"muted\">Aucun ELF connu à inspecter.</p>"}</section>`;
+}
+
 export function availableProjectCommands(state: DashboardState): Qc1Command[] {
   const candidate = state.projectDiscovery.activeCandidate;
   const family = candidate?.family || state.project.targetFamily;
@@ -80,8 +122,6 @@ export function renderBuildView(state: DashboardState): string {
     ${row("Dernier Flash", state.flash.lastFlashTime)}${operationRow("Programmation", state.operations.programming)}
     ${operationRow("Vérification", state.operations.verification)}${operationRow("Reset demandé", state.operations.reset)}
     <details class="operation-details"><summary>Résultats détaillés et ressources</summary>
-    ${row("Flash utilisée (sortie du build)", state.build.flashUsage)}${row("RAM utilisée (sortie du build)", state.build.ramUsage)}
-    <p class="muted">Usage affiché uniquement s'il est fourni par le build. Aucun pourcentage ou capacité n'est supposé; les usages par cœur restent non attribués sans sortie fiable.</p>
     ${operationRow("Session Debug", state.operations.debugSession)}${operationRow("Exécution firmware", state.operations.execution)}</details>
-  </section><section class="card"><h2>Artefacts existants</h2>${state.artifacts.map((artifact) => `<div class="artifact"><strong>${escapeHtml(artifact.core ? `${artifact.core} ${artifact.kind}` : artifact.kind)}</strong><span>${(artifact.sizeBytes / 1024).toFixed(1)} KB</span><div class="path">${escapeHtml(artifact.path)}</div>${action("openArtifact", "Révéler", `data-id="${escapeHtml(artifact.id)}"`)}</div>`).join("") || "<p class=\"muted\">Aucun ELF/BIN/HEX/MAP trouvé dans les chemins connus du build.</p>"}</section>`;
+  </section>${renderMemoryInspection(state)}<section class="card"><h2>Artefacts existants</h2>${state.artifacts.map((artifact) => `<div class="artifact"><strong>${escapeHtml(artifact.core ? `${artifact.core} ${artifact.kind}` : artifact.kind)}</strong><span>${(artifact.sizeBytes / 1024).toFixed(1)} KB</span><div class="path">${escapeHtml(artifact.path)}</div>${action("openArtifact", "Révéler", `data-id="${escapeHtml(artifact.id)}"`)}</div>`).join("") || "<p class=\"muted\">Aucun ELF/BIN/HEX/MAP trouvé dans les chemins connus du build.</p>"}</section>`;
 }
