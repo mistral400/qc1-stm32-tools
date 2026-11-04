@@ -2,6 +2,19 @@ import type { DashboardState } from "./dashboardState";
 import type { Qc1Command } from "./webviewMessages";
 import { action, escapeHtml, row } from "./html";
 
+function operationSummary(operation: DashboardState["operations"]["build"]): string {
+  const labels = {
+    "not-run": "Non exécuté",
+    running: "En cours",
+    success: "Réussi",
+    failed: "Échoué",
+    skipped: "Non lancé",
+    unknown: "Non confirmé",
+  } as const;
+  const label = labels[operation.status];
+  return operation.message ? `${label} · ${operation.message}` : label;
+}
+
 export function availableProjectCommands(state: DashboardState): Qc1Command[] {
   const candidate = state.projectDiscovery.activeCandidate;
   const family = candidate?.family || state.project.targetFamily;
@@ -36,10 +49,13 @@ export function renderBuildView(state: DashboardState): string {
     <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><div id="progressFill" style="width:${percent}%"></div></div>
     <div class="row"><span id="progressPhase">${escapeHtml(progress.phase)}</span><span id="progressCounter">${progress.measured ? `${progress.completedSteps} / ${progress.totalSteps}` : "Étape non mesurée"}</span><span id="progressPercent">${percent}%</span></div>
     <p id="progressStep" class="muted">${escapeHtml(progress.currentStep || "Les compteurs Ninja sont utilisés lorsqu'ils sont disponibles.")}</p>
-    ${row("Dernier build", `${state.build.lastBuildTime} · ${state.build.lastBuildSuccess ? "Réussi" : "Aucun succès confirmé"}`)}${row("Durée", `${(state.build.buildRuntimeMs / 1000).toFixed(1)} s`)}
+    ${row("Dernier build", `${state.build.lastBuildTime} · ${operationSummary(state.operations.build)}`)}${row("Durée", `${(state.build.buildRuntimeMs / 1000).toFixed(1)} s`)}
     ${row("Erreurs / warnings", `${state.build.errors} / ${state.build.warnings}`)}
     ${row("Flash utilisée (sortie du build)", state.build.flashUsage)}${row("RAM utilisée (sortie du build)", state.build.ramUsage)}
     <p class="muted">Usage affiché uniquement s'il est fourni par le build. Aucun pourcentage ou capacité n'est supposé; les usages par cœur restent non attribués sans sortie fiable.</p>
-    ${row("Dernier flash", `${state.flash.lastFlashTime} · ${state.flash.lastFlashSuccess ? "Réussi" : "Non confirmé"}`)}
+    ${row("Validation de l'artefact", operationSummary(state.operations.artifactValidation))}
+    ${row("Programmation", `${state.flash.lastFlashTime} · ${operationSummary(state.operations.programming)}`)}
+    ${row("Vérification", operationSummary(state.operations.verification))}${row("Reset demandé", operationSummary(state.operations.reset))}
+    ${row("Session Debug", operationSummary(state.operations.debugSession))}${row("Exécution firmware", operationSummary(state.operations.execution))}
   </section><section class="card"><h2>Artefacts existants</h2>${state.artifacts.map((artifact) => `<div class="artifact"><strong>${escapeHtml(artifact.core ? `${artifact.core} ${artifact.kind}` : artifact.kind)}</strong><span>${(artifact.sizeBytes / 1024).toFixed(1)} KB</span><div class="path">${escapeHtml(artifact.path)}</div>${action("openArtifact", "Révéler", `data-id="${escapeHtml(artifact.id)}"`)}</div>`).join("") || "<p class=\"muted\">Aucun ELF/BIN/HEX/MAP trouvé dans les chemins connus du build.</p>"}</section>`;
 }

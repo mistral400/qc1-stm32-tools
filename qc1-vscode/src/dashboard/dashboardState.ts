@@ -79,6 +79,34 @@ export interface QC1FlashStatus {
   targetMCU: string;
 }
 
+/** Résultat propre à une étape QC1, sans assimiler le processus entier au build. */
+export type QC1OperationStatus = "not-run" | "running" | "success" | "failed" | "skipped" | "unknown";
+export type QC1OperationName = "build" | "artifactValidation" | "programming" | "verification" | "reset" | "debugSession" | "execution";
+
+export interface QC1OperationResult {
+  status: QC1OperationStatus;
+  command?: string;
+  message?: string;
+  startedAt?: number;
+  completedAt?: number;
+  runtimeMs?: number;
+}
+
+export type QC1OperationStates = Record<QC1OperationName, QC1OperationResult>;
+
+export function createInitialOperationStates(): QC1OperationStates {
+  const initial = (): QC1OperationResult => ({ status: "not-run" });
+  return {
+    build: initial(),
+    artifactValidation: initial(),
+    programming: initial(),
+    verification: initial(),
+    reset: initial(),
+    debugSession: initial(),
+    execution: initial(),
+  };
+}
+
 // Résultat de la détection des dossiers et artefacts du projet STM32.
 export interface QC1ProjectStatus {
   workspaceOpened: boolean;
@@ -153,6 +181,8 @@ export interface DashboardState {
   build: QC1BuildStatus;
 
   flash: QC1FlashStatus;
+
+  operations: QC1OperationStates;
 
   project: QC1ProjectStatus;
 
@@ -235,6 +265,8 @@ export const defaultDashboardState: DashboardState = {
     method: "--",
     targetMCU: "--"
   },
+
+  operations: createInitialOperationStates(),
 
   project: {
     workspaceOpened: false,

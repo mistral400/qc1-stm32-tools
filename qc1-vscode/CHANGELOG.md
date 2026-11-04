@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1 - 2026-11-04
+
+- Track Build, artifact validation, programming, verification, reset, Debug session and firmware execution as separate results.
+- Preserve operation results by project while switching projects during the VS Code session.
+- Keep a successful build successful when a later Flash or Debug stage fails; stop later pipeline stages when a process fails.
+- Detect common CMake, GCC, linker and explicit programmer errors in process output even when a tool returns exit code zero.
+- Show Flash as fully successful only when artifact validation, programming, verification and reset are all confirmed; current artifact provenance remains unconfirmed and is reported honestly.
+- Add regression coverage for sequential stages, output error detection, project isolation and Flash evidence requirements.
+- Package and activation smoke checks passed on macOS arm64 / VS Code 1.144.1. STM32F103/H7 hardware was not tested.
+
 ## 0.4.0 - 2026-10-12
 
 - Import CubeIDE STM32H7 dual-core projects without a root CMakeLists.txt; read per-core `.cproject` MCU, FPU, ABI, includes and defines, and keep CM7/CM4 sources, startups and linker scripts separate.

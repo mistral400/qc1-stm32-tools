@@ -7,7 +7,7 @@ const os = require("node:os");
 const { getDashboardHtml, renderDashboardViews } = require("../out/dashboard/dashboardHtml");
 const { renderToolsView } = require("../out/dashboard/toolsView");
 const { defaultDashboardState } = require("../out/dashboard/dashboardState");
-const { availableProjectCommands } = require("../out/dashboard/buildView");
+const { availableProjectCommands, renderBuildView } = require("../out/dashboard/buildView");
 const { dashboardClient } = require("../out/dashboard/dashboardClient");
 const { parseWebviewMessage } = require("../out/dashboard/webviewMessages");
 const { normalizeTools } = require("../out/dashboard/managerUiState");
@@ -35,6 +35,23 @@ test("navigation has five real pages and context actions preserve F1/H755 modes"
   assert.ok(dual.includes("build") && dual.includes("flash") && dual.includes("debug-cm7") && dual.includes("debug-cm4"));
   assert.equal(dual.includes("debug"), false);
   assert.deepEqual(availableProjectCommands(defaultDashboardState), []);
+});
+
+test("Build page reports build, programming, verification and execution as separate evidence", () => {
+  const state = structuredClone(defaultDashboardState);
+  state.build.lastBuildTime = "maintenant";
+  state.build.lastBuildSuccess = false;
+  state.operations.build = { status: "success", message: "Processus CMake de compilation terminé sans erreur détectée." };
+  state.operations.programming = { status: "failed", message: "ST-Link inaccessible" };
+  state.operations.verification = { status: "unknown", message: "Aucune preuve suffisante de vérification indépendante." };
+  state.operations.reset = { status: "unknown", message: "Reset non confirmé." };
+  state.operations.execution = { status: "unknown", message: "QC1 ne confirme pas le démarrage du firmware." };
+  const html = renderBuildView(state);
+  assert.match(html, /Processus CMake de compilation terminé sans erreur détectée/);
+  assert.match(html, /ST-Link inaccessible/);
+  assert.match(html, /Aucune preuve suffisante de vérification indépendante/);
+  assert.match(html, /QC1 ne confirme pas le démarrage du firmware/);
+  assert.doesNotMatch(html, /Aucun succès confirmé/);
 });
 
 test("project view shows documented H745 project compatibility without changing its MCU identity", () => {

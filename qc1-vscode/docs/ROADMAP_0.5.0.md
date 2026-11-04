@@ -1,0 +1,56 @@
+# Plan de refactorisation QC1 0.5.0
+
+## Point de départ vérifié
+
+- Version du manifeste : **0.4.0** (`package.json`). Branche de travail : `codex/qc1-refactor-0.5.0`, créée à partir du checkout QC1 actif `2cb5b2a` (branche locale `codex/qc1-stm32h7-release-status`).
+- GitHub `main` était au commit `8dae7c4`; son écart par rapport à la branche active porte sur trois fichiers de documentation de statut de release. La branche locale `main` pointe sur un historique divergent `ea13851` (`pre 0.5`, manifeste 0.3.1); elle reste intacte et n'est pas utilisée comme base.
+- Deux changements préexistants non commités : `.DS_Store` et `qc1-vscode/.DS_Store`. Leurs empreintes ont été relevées avant création de branche. Aucun fichier non suivi.
+- Environnement : macOS arm64, Node 26.8.2, npm 11.19.1, VS Code 1.144.1. La CI configurée utilise Node 22 sur six cibles OS/architecture. `node_modules` et `package-lock.json` existent; `npm ci` a été écarté pour ne pas remplacer l'installation locale avant d'en vérifier la nécessité.
+
+## Baseline locale (avant refactorisation)
+
+| Contrôle | Résultat |
+| --- | --- |
+| `npm run compile` | PASS |
+| `npm run typecheck` | PASS |
+| `npm run lint` | PASS |
+| `npm test` | 137 PASS, 0 échec, 2 ignorés sur 139 |
+| `npm audit` | ÉCHEC : 15 avis (2 hauts, 13 modérés), dépendances de développement/packaging notamment Azure MSAL, minimatch et qs |
+| Packaging `vsce` vers `/tmp/qc1-stm32-tools-baseline-0.4.0.vsix` | PASS, 96 fichiers, 324,38 KB |
+| Tests physiques STM32F103/H7 | NON EFFECTUÉS |
+| Rendu/activation dans un hôte Extension Development Host | NON EFFECTUÉS dans cette baseline |
+
+Les deux tests ignorés nécessitent `QC1_CUBE_H7_PATH` (installation locale STM32CubeH7/GPIO_Demo) et CMake/Ninja/Arm GNU Toolchain pour le scénario ExternalProject. Les tests de build logiciels existants incluent une vraie compilation ARM STM32F1; cela ne constitue pas un test de flash ni matériel.
+
+## Jalons et critères
+
+| Jalon | Portée | Critères de validation |
+| --- | --- | --- |
+| 0.4.1 | Résultats séparés par opération/projet; coordination Build/Flash/Debug | Un échec matériel ne modifie pas le résultat Build; build échoué bloque Flash/Debug; états liés au bon projet; tests de succès/échec/changement de projet; compile, typecheck, lint, tests, packaging et activation VS Code |
+| 0.4.2 | Provenance et validation des artefacts; programmation et vérification obligatoires; état reset distinct | Aucun artefact absent/ancien/ambigu utilisé; vérifier OpenOCD/st-flash selon capacités démontrées; tests de processus simulés; pas de revendication de démarrage |
+| 0.4.3 | Ressources ST-Link/OpenOCD, conflits, reset configurable | Sessions QC1 suivies sans tuer celles de l'utilisateur; conflits bloqués avec résolution; paramètres compatibles; tests simulés |
+| 0.4.4 | Modernisation du Webview existant | Navigation compacte, hiérarchie d'actions, états lisibles, accessibilité sémantique, thèmes; tests UI automatisés et vérifications visuelles déclarées séparément |
+| 0.4.5 | Navigation hybride VS Code / TreeViews / dashboard éditeur | Synchronisation sans état métier dupliqué, commandes existantes préservées, activation et packaging |
+| 0.4.6 | UART TX/RX, données graphiques bornées, historique et diagnostics guidés | Tests avec ports/processus simulés, mémoire bornée, documentation multiplateforme; aucun test matériel implicite |
+| 0.5.0 | Inspection statique ELF/MAP Flash/RAM et stabilisation intégrée | Ne pas confondre RAM statique et runtime; STM32F1/H7 couverts; CI, tests, packaging, documentation et limites matérielles vérifiés |
+
+## Garde-fous
+
+- Une version ne sera pas incrémentée ni déclarée livrée si ses critères ne passent pas. Chaque changement restera sur cette branche; les commits et tags de jalon ne seront créés qu'après validation.
+- Pas de flash, reset matériel, effacement, option bytes, test physique, merge dans `main` ni publication Marketplace sans autorisation explicite.
+- Les modifications utilisateur préexistantes et la branche locale divergente `main` sont conservées. Les tests externes ignorés, résultats CI, activation VS Code et validations physiques seront rapportés séparément.
+
+## État de travail
+
+Inspection et baseline terminées. Jalon actif : **0.4.1 — séparation et attribution des résultats Build/Flash/Debug**.
+
+### Tranche de code en cours — 0.4.1
+
+- Ajout de résultats typés pour Build, validation d'artefact, programmation, vérification, reset, session Debug et exécution.
+- Le tableau Build affiche les étapes séparément; les résultats sont conservés dans un historique borné par projet pendant la session.
+- Le statut Build est calculé séparément du résultat global de la commande. Les diagnostics CMake/GCC/linker et erreurs explicites de programmation sont aussi examinés lorsque le processus retourne 0.
+- Ajout de tests unitaires pour le classement Build, les textes d'erreur, l'isolation de l'historique projet et la règle stricte de succès Flash.
+- Validation locale : `npm test` PASS (149, 2 ignorés, 151 total), `npm run typecheck` PASS, `npm run lint` PASS, `git diff --check` PASS. Les deux tests ignorés restent ceux décrits dans la baseline.
+- Activation smoke en VS Code 1.144.1/macOS arm64 : PASS, extension activée et commandes publiques vérifiées. Le test a utilisé un lanceur et un profil temporaires dans `/tmp`; aucune commande matérielle n'a été invoquée.
+- Packaging 0.4.1 : PASS, `qc1-vscode/qc1-stm32-tools-0.4.1.vsix` (101 fichiers, 336,78 KB); `unzip -t` confirme l'intégrité de l'archive.
+- Aucun test CI distant ni test matériel n'a été effectué. La tranche est localement validée; tag/commit de jalon à enregistrer avant de poursuivre.

@@ -17,8 +17,21 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.defaultDashboardState = void 0;
+exports.createInitialOperationStates = createInitialOperationStates;
 exports.getOsLabel = getOsLabel;
 exports.finishProgress = finishProgress;
+function createInitialOperationStates() {
+    const initial = () => ({ status: "not-run" });
+    return {
+        build: initial(),
+        artifactValidation: initial(),
+        programming: initial(),
+        verification: initial(),
+        reset: initial(),
+        debugSession: initial(),
+        execution: initial(),
+    };
+}
 /** Convertit le nom technique de Node.js en libellé lisible dans l'interface. */
 function getOsLabel(platform) {
     switch (platform) {
@@ -78,6 +91,7 @@ exports.defaultDashboardState = {
         method: "--",
         targetMCU: "--"
     },
+    operations: createInitialOperationStates(),
     project: {
         workspaceOpened: false,
         projectDetected: false,

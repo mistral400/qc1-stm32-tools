@@ -72,6 +72,8 @@ const recentProjectsController_1 = require("./qc1/recentProjectsController");
 const projectArtifacts_1 = require("./qc1/projectArtifacts");
 const managerUiState_1 = require("./dashboard/managerUiState");
 const webviewMessages_1 = require("./dashboard/webviewMessages");
+const operationHistory_1 = require("./qc1/operationHistory");
+const operationCoordinator_1 = require("./qc1/operationCoordinator");
 // État partagé entre le contrôleur et la Webview QC1.
 let dashboardState = dashboardState_1.defaultDashboardState;
 let dashboardPanel;
@@ -1406,6 +1408,7 @@ class QC1PanelProvider {
         this.contextGeneration = 0;
         this.disposables = [];
         this.watchers = [];
+        this.operationHistory = new operationHistory_1.ProjectOperationHistory();
         this.outputLines = [];
         this.configuration = new projectConfiguration_1.ProjectConfigurationController({
             hasWorkspace: () => Boolean(vscode.workspace.workspaceFolders?.length || vscode.workspace.workspaceFile),
@@ -1479,7 +1482,16 @@ class QC1PanelProvider {
         const status = getQc1Status(this.context);
         const changed = this.discovery.snapshot.selectedPath !== status.projectPath;
         if (changed) {
-            dashboardState = { ...dashboardState, build: { ...dashboardState_1.defaultDashboardState.build }, flash: { ...dashboardState_1.defaultDashboardState.flash }, artifacts: [] };
+            const previous = status.projectPath ? this.operationHistory.get(status.projectPath) : undefined;
+            dashboardState = {
+                ...dashboardState,
+                ...(previous || {
+                    build: { ...dashboardState_1.defaultDashboardState.build },
+                    flash: { ...dashboardState_1.defaultDashboardState.flash },
+                    operations: (0, dashboardState_1.createInitialOperationStates)(),
+                }),
+                artifacts: [],
+            };
             this.discovery.setSelectedPath(status.projectPath);
             this.watchProject(status.projectPath);
         }
@@ -1534,6 +1546,38 @@ class QC1PanelProvider {
             return;
         dashboardState = { ...dashboardState, artifacts };
         this.sendDashboardState();
+    }
+    rememberProjectOperationSnapshot(projectPath, snapshot, publish = false) {
+        this.operationHistory.set(projectPath, snapshot);
+        const activeProjectPath = getQc1Status(this.context).projectPath;
+        if (activeProjectPath && (0, operationHistory_1.projectOperationKey)(activeProjectPath) === (0, operationHistory_1.projectOperationKey)(projectPath)) {
+            dashboardState = {
+                ...dashboardState,
+                build: { ...snapshot.build },
+                flash: { ...snapshot.flash },
+                operations: snapshot.operations,
+            };
+            if (publish)
+                this.sendDashboardState();
+        }
+    }
+    projectOperationSnapshot(projectPath) {
+        const historical = this.operationHistory.get(projectPath);
+        if (historical)
+            return historical;
+        const activeProjectPath = getQc1Status(this.context).projectPath;
+        if (activeProjectPath && (0, operationHistory_1.projectOperationKey)(activeProjectPath) === (0, operationHistory_1.projectOperationKey)(projectPath)) {
+            return {
+                build: { ...dashboardState.build },
+                flash: { ...dashboardState.flash },
+                operations: { ...dashboardState.operations },
+            };
+        }
+        return {
+            build: { ...dashboardState_1.defaultDashboardState.build },
+            flash: { ...dashboardState_1.defaultDashboardState.flash },
+            operations: (0, dashboardState_1.createInitialOperationStates)(),
+        };
     }
     dispose() {
         this.disposed = true;
@@ -2284,6 +2328,45 @@ class QC1PanelProvider {
         }
         const projectDir = toolStatus.projectPath || root;
         const displayedCommand = `qc1 ${command}`;
+        const buildRequested = ["build", "rebuild", "tsmake", "flash", "debug", "run"].includes(action);
+        const programmingRequested = ["flash", "run"].includes(action);
+        const debugRequested = action === "debug";
+        const operationStartedAt = Date.now();
+        let operationSnapshot = this.projectOperationSnapshot(projectDir);
+        const recordOperation = (name, result) => {
+            operationSnapshot = {
+                ...operationSnapshot,
+                operations: (0, operationHistory_1.setOperationResult)(operationSnapshot.operations, name, result),
+            };
+            this.rememberProjectOperationSnapshot(projectDir, operationSnapshot);
+        };
+        const recordBlockedOperations = (message) => {
+            const completedAt = Date.now();
+            if (buildRequested)
+                recordOperation("build", { status: "skipped", command, message, startedAt: operationStartedAt, completedAt, runtimeMs: 0 });
+            if (programmingRequested) {
+                recordOperation("artifactValidation", { status: "skipped", command, message: `Validation non lancée : ${message}`, startedAt: operationStartedAt, completedAt, runtimeMs: 0 });
+                recordOperation("programming", { status: "skipped", command, message: `Programmation non lancée : ${message}`, startedAt: operationStartedAt, completedAt, runtimeMs: 0 });
+                recordOperation("verification", { status: "skipped", command, message: "Programmation non lancée.", completedAt });
+                recordOperation("reset", { status: "skipped", command, message: "Programmation non lancée.", completedAt });
+                recordOperation("execution", { status: "unknown", command, message: "Aucune exécution ne peut être confirmée.", completedAt });
+            }
+            if (debugRequested)
+                recordOperation("debugSession", { status: "skipped", command, message: `Session Debug non lancée : ${message}`, startedAt: operationStartedAt, completedAt, runtimeMs: 0 });
+            this.rememberProjectOperationSnapshot(projectDir, operationSnapshot, true);
+        };
+        if (buildRequested)
+            recordOperation("build", { status: "running", command, message: "Préparation du build", startedAt: operationStartedAt });
+        if (programmingRequested) {
+            recordOperation("artifactValidation", { status: "unknown", command, message: "La présence des fichiers sera contrôlée; provenance et fraîcheur non garanties.", startedAt: operationStartedAt });
+            recordOperation("programming", { status: "not-run", command, message: "En attente du build et de la préparation." });
+            recordOperation("verification", { status: "not-run", command, message: "En attente de la programmation." });
+            recordOperation("reset", { status: "not-run", command, message: "En attente de la programmation." });
+            recordOperation("execution", { status: "unknown", command, message: "QC1 ne confirme pas le démarrage du firmware." });
+        }
+        if (debugRequested)
+            recordOperation("debugSession", { status: "not-run", command, message: "En attente du build." });
+        this.rememberProjectOperationSnapshot(projectDir, operationSnapshot, true);
         this.postStatus(`Running: ${command}`, "running");
         this.appendOutput(`$ ${displayedCommand}`, "command");
         this.appendOutput(`CWD: ${projectDir}`, "command");
@@ -2309,6 +2392,7 @@ class QC1PanelProvider {
             this.applyQc1Error(qc1Error);
             this.appendQc1Error(qc1Error, "commande");
             this.sendQc1ErrorAnalysis(qc1Error);
+            recordBlockedOperations(qc1Error.message);
             this.sendDashboardState();
             this.postStatus(qc1Error.message, "error");
             this.appendOutput("--- terminé ---", "separator");
@@ -2324,25 +2408,45 @@ class QC1PanelProvider {
             this.applyQc1Error(qc1Error, blockingLevel);
             this.appendQc1Error(qc1Error, blockingDiagnostic.code.startsWith("QC1-PRJ") ? "projet" : "outil");
             this.sendQc1ErrorAnalysis(qc1Error, blockingLevel);
+            recordBlockedOperations(qc1Error.message);
             this.sendDashboardState();
             this.sendTerminalMeta();
             this.postStatus(qc1Error.message, "error");
             this.appendOutput("--- terminé ---", "separator");
             return;
         }
-        const invocations = buildProcessInvocations(toolStatus, command);
-        const environment = getExecutionEnv(toolStatus);
         const stdoutParts = [];
         const stderrParts = [];
+        const buildStdoutParts = [];
+        const buildStderrParts = [];
         const appendBounded = (parts, chunk) => {
             parts.push(chunk.slice(-128 * 1024));
             while (parts.length > 128)
                 parts.shift();
         };
         const executedCommands = [];
+        let invocations;
         let failedResult;
+        let failedInvocation;
+        let activeInvocation;
+        let operationFailureMessage = "";
+        let buildProcessSucceeded;
+        let buildFinishedAt;
+        let buildTextFailureMessage = "";
+        let programmingStartedAt;
+        let programmerProcessCount = 0;
+        let successfulProgrammerProcessCount = 0;
+        const programmerVerificationRequests = [];
+        const programmerResetRequests = [];
+        let openOcdProgrammerUsed = false;
+        let artifactValidationAttempted = false;
+        let artifactValidationFailed = false;
+        let debugSessionStartedAt;
+        let debugSessionSucceeded = false;
         let probePrepared = false;
         try {
+            invocations = buildProcessInvocations(toolStatus, command);
+            const environment = getExecutionEnv(toolStatus);
             if (toolStatus.cmakeProjectReady) {
                 const query = path.join(toolStatus.buildPath, ".cmake", "api", "v1", "query", "client-qc1");
                 await fs.promises.mkdir(query, { recursive: true });
@@ -2356,7 +2460,8 @@ class QC1PanelProvider {
                     }
                 }
             }
-            for (const invocation of invocations) {
+            await (0, operationCoordinator_1.executeSequentially)(invocations, async (invocation) => {
+                activeInvocation = invocation;
                 (0, projectConfiguration_1.assertOperationConfiguration)(configurationFingerprint, operationConfigurationFingerprint(this.context));
                 if (invocation.phase === "flashing" && !probePrepared) {
                     const selectedSerial = await this.ensureStlinkSelection(false, getQc1Status(this.context));
@@ -2378,10 +2483,23 @@ class QC1PanelProvider {
                     const refreshed = getQc1Status(this.context);
                     const refreshedElf = invocation.core === "cm7" ? refreshed.cm7ElfPath : invocation.core === "cm4" ? refreshed.cm4ElfPath : refreshed.elfPath;
                     const refreshedBin = invocation.core === "cm7" ? refreshed.cm7BinPath : invocation.core === "cm4" ? refreshed.cm4BinPath : refreshed.binPath;
-                    if (invocation.inputArtifact === "h7Dual" && (!fileExists(refreshed.cm7ElfPath) || !fileExists(refreshed.cm4ElfPath)))
+                    artifactValidationAttempted = true;
+                    if (invocation.inputArtifact === "h7Dual" && (!fileExists(refreshed.cm7ElfPath) || !fileExists(refreshed.cm4ElfPath))) {
+                        artifactValidationFailed = true;
+                        recordOperation("artifactValidation", { status: "failed", command, message: "ELF CM7 ou CM4 manquant.", startedAt: operationStartedAt });
                         throw new Error("Flash H7 dual-core arrêté : les deux ELF CM7 et CM4 doivent exister avant la programmation.");
-                    if (invocation.inputArtifact === "elf" && !fileExists(refreshedElf))
+                    }
+                    if (invocation.inputArtifact === "elf" && !fileExists(refreshedElf)) {
+                        artifactValidationFailed = true;
+                        recordOperation("artifactValidation", { status: "failed", command, message: `ELF ${invocation.core?.toUpperCase() || "STM32"} absent.`, startedAt: operationStartedAt });
                         throw new Error(`ELF ${invocation.core?.toUpperCase() || "STM32"} introuvable: configure le projet pour alimenter la CMake File API ou règle qc1.${invocation.core ? `${invocation.core}ElfPath` : "elfPath"}.`);
+                    }
+                    recordOperation("artifactValidation", {
+                        status: "unknown",
+                        command,
+                        message: "Fichier présent; provenance et fraîcheur non vérifiées.",
+                        startedAt: operationStartedAt,
+                    });
                     if (invocation.executable === toolStatus.openocdPath) {
                         invocation.args = invocation.inputArtifact === "h7Dual"
                             ? (0, hardware_1.getOpenOcdMultiProgramArgs)([
@@ -2395,8 +2513,11 @@ class QC1PanelProvider {
                         invocation.args[4] = refreshedBin;
                     }
                     else if (invocation.inputArtifact === "bin") {
-                        if (!fileExists(refreshedBin))
+                        if (!fileExists(refreshedBin)) {
+                            artifactValidationFailed = true;
+                            recordOperation("artifactValidation", { status: "failed", command, message: `BIN ${invocation.core?.toUpperCase() || "STM32"} absent après objcopy.`, startedAt: operationStartedAt });
                             throw new Error(`BIN ${invocation.core?.toUpperCase() || "STM32"} introuvable après objcopy/build.`);
+                        }
                         const flashAddress = invocation.args.at(-1) || "0x08000000";
                         invocation.args = (0, hardware_1.getStFlashWriteArgs)(refreshedBin, flashAddress, refreshed.stlinkSerialNumber || undefined);
                     }
@@ -2405,27 +2526,65 @@ class QC1PanelProvider {
                 const displayedInvocation = formatInvocation(invocation.executable, invocation.args);
                 executedCommands.push(displayedInvocation);
                 this.appendOutput(`$ ${displayedInvocation}`, "command");
+                const isProgrammer = invocation.phase === "flashing" &&
+                    (invocation.executable === toolStatus.openocdPath || invocation.executable === toolStatus.stFlashPath);
+                if (isProgrammer) {
+                    const startedAt = Date.now();
+                    programmingStartedAt ?? (programmingStartedAt = startedAt);
+                    programmerProcessCount++;
+                    const argumentsText = invocation.args.join(" ");
+                    const openOcdProgrammer = invocation.executable === toolStatus.openocdPath;
+                    openOcdProgrammerUsed || (openOcdProgrammerUsed = openOcdProgrammer);
+                    programmerVerificationRequests.push(openOcdProgrammer && /\bverify\b/i.test(argumentsText));
+                    programmerResetRequests.push(/(?:--reset|\breset\b)/i.test(argumentsText));
+                    recordOperation("programming", { status: "running", command, message: invocation.label, startedAt: programmingStartedAt });
+                    this.rememberProjectOperationSnapshot(projectDir, operationSnapshot, true);
+                }
                 const result = await runSpawnedProcess(invocation, projectDir, environment, (chunk) => {
                     const safeChunk = (0, probeSelection_1.redactStlinkSerials)(chunk);
                     appendBounded(stdoutParts, safeChunk);
+                    if (invocation.phase === "configuring" || invocation.phase === "building") {
+                        appendBounded(buildStdoutParts, safeChunk);
+                        buildTextFailureMessage || (buildTextFailureMessage = (0, operationCoordinator_1.buildOutputFailureReason)(buildStdoutParts.join(""), buildStderrParts.join("")) || "");
+                    }
                     if (invocation.tracksNinja)
                         progressManager.consumeOutput(chunk);
                     this.appendOutput(safeChunk, "stdout");
                 }, (chunk) => {
                     const safeChunk = (0, probeSelection_1.redactStlinkSerials)(chunk);
                     appendBounded(stderrParts, safeChunk);
+                    if (invocation.phase === "configuring" || invocation.phase === "building") {
+                        appendBounded(buildStderrParts, safeChunk);
+                        buildTextFailureMessage || (buildTextFailureMessage = (0, operationCoordinator_1.buildOutputFailureReason)(buildStdoutParts.join(""), buildStderrParts.join("")) || "");
+                    }
                     if (invocation.tracksNinja)
                         progressManager.consumeOutput(chunk);
                     this.appendOutput(safeChunk, "stderr");
                 });
-                if (!(0, processTools_1.processSucceeded)(result)) {
-                    failedResult = result;
-                    break;
+                const programmerFailureFromOutput = isProgrammer ? (0, operationCoordinator_1.programmerOutputFailureReason)(result.stdout, result.stderr) : undefined;
+                const processOk = (0, processTools_1.processSucceeded)(result) && !programmerFailureFromOutput;
+                const buildFailureFromOutput = invocation.phase === "configuring" || invocation.phase === "building"
+                    ? buildTextFailureMessage || (0, operationCoordinator_1.buildOutputFailureReason)(buildStdoutParts.join(""), buildStderrParts.join(""))
+                    : undefined;
+                if (invocation.phase === "building" || (invocation.phase === "configuring" && (!processOk || buildFailureFromOutput))) {
+                    buildProcessSucceeded = processOk && !buildFailureFromOutput;
+                    buildFinishedAt = Date.now();
+                }
+                if (isProgrammer && processOk)
+                    successfulProgrammerProcessCount++;
+                if (!processOk || buildFailureFromOutput) {
+                    const recognizedFailure = buildFailureFromOutput || programmerFailureFromOutput;
+                    failedResult = recognizedFailure && (0, processTools_1.processSucceeded)(result)
+                        ? { ...result, error: new Error((0, probeSelection_1.redactStlinkSerials)(recognizedFailure)) }
+                        : result;
+                    failedInvocation = invocation;
+                    return false;
                 }
                 if (invocation.phase === "building" && toolStatus.cubeIdeImport && (0, targetArchitecture_1.isStm32H7Family)(toolStatus.architecture.family)) {
                     await writeH7BuildReport(getQc1Status(this.context), command);
                 }
-            }
+                return true;
+            });
             if (!failedResult && action === "debug") {
                 const selectedSerial = await this.ensureStlinkSelection(false, getQc1Status(this.context));
                 if (!selectedSerial)
@@ -2447,13 +2606,19 @@ class QC1PanelProvider {
                 const debugConfiguration = (0, hardware_1.getCortexDebugConfiguration)(projectDir, executable, refreshed.architecture.family, core, needsBothH755Targets(refreshed.architecture), refreshed.stlinkSerialNumber || undefined, debugDevice);
                 debugConfiguration.serverpath = refreshed.openocdPath;
                 debugConfiguration.gdbPath = refreshed.gdbPath;
+                debugSessionStartedAt = Date.now();
+                recordOperation("debugSession", { status: "running", command, message: `Démarrage de la session ${label}`, startedAt: debugSessionStartedAt });
+                this.rememberProjectOperationSnapshot(projectDir, operationSnapshot, true);
                 const started = await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(vscode.Uri.file(projectDir)), debugConfiguration);
                 if (!started)
                     throw new Error(`Cortex-Debug n'a pas démarré la session ${label}.`);
+                debugSessionSucceeded = true;
                 this.appendOutput(`[QC1] Session Cortex-Debug ${label} lancée`, "stdout");
             }
         }
         catch (error) {
+            operationFailureMessage = error instanceof Error ? error.message : String(error);
+            failedInvocation = activeInvocation;
             failedResult = {
                 exitCode: getExitCode(error),
                 stdout: stdoutParts.join(""),
@@ -2467,10 +2632,127 @@ class QC1PanelProvider {
         const stderrText = stderrParts.join("");
         const fullOutput = `${stdoutText}\n${stderrText}`;
         const parsed = (0, qc1Parser_1.parseQc1Output)(fullOutput);
+        const buildParsed = (0, qc1Parser_1.parseQc1Output)(`${buildStdoutParts.join("")}\n${buildStderrParts.join("")}`);
         const detectedProbeStatus = (0, hardware_1.readStlinkProbeStatus)(fullOutput);
         if (detectedProbeStatus !== "non testé")
             stlinkProbeStatus = detectedProbeStatus;
         const success = !failedResult;
+        const operationCompletedAt = Date.now();
+        const buildOperationStatus = (0, operationCoordinator_1.resolveBuildStatus)({
+            requested: buildRequested,
+            processSucceeded: buildProcessSucceeded,
+            commandFailed: Boolean(failedResult || operationFailureMessage),
+            failurePhase: failedInvocation?.phase,
+        });
+        const buildFailureMessage = buildTextFailureMessage || operationFailureMessage ||
+            (failedResult?.error instanceof Error ? failedResult.error.message : failedResult?.stderr) ||
+            "Échec pendant la configuration ou la compilation.";
+        const buildMessage = buildOperationStatus === "success"
+            ? "Processus CMake de compilation terminé sans erreur détectée."
+            : buildOperationStatus === "failed"
+                ? buildFailureMessage
+                : buildOperationStatus === "skipped" ? "Build non exécuté." : "";
+        if (buildRequested) {
+            const startedAt = operationSnapshot.operations.build.startedAt || operationStartedAt;
+            const finishedAt = buildFinishedAt || operationCompletedAt;
+            recordOperation("build", {
+                status: buildOperationStatus,
+                command,
+                message: buildMessage,
+                startedAt,
+                completedAt: operationCompletedAt,
+                runtimeMs: Math.max(0, finishedAt - startedAt),
+            });
+        }
+        if (programmingRequested) {
+            const programmingStatus = programmerProcessCount === 0 ? "skipped" :
+                successfulProgrammerProcessCount === programmerProcessCount && !failedResult ? "success" : "failed";
+            const programmingMessage = programmingStatus === "success"
+                ? "Processus OpenOCD/st-flash terminé sans erreur détectée."
+                : programmingStatus === "failed"
+                    ? operationFailureMessage || failedResult?.stderr || "Le processus de programmation a échoué."
+                    : `Programmation non lancée${operationFailureMessage ? ` : ${operationFailureMessage}` : buildOperationStatus !== "success" ? " : le build n'a pas abouti" : ""}.`;
+            const allProgrammersVerified = programmerVerificationRequests.length > 0 && programmerVerificationRequests.every(Boolean);
+            const allProgrammersRequestedReset = programmerResetRequests.length > 0 && programmerResetRequests.every(Boolean);
+            const verificationStatus = programmerProcessCount === 0 ? "skipped" :
+                successfulProgrammerProcessCount === programmerProcessCount && allProgrammersVerified ? "success" : "unknown";
+            const resetStatus = programmerProcessCount === 0 ? "skipped" :
+                successfulProgrammerProcessCount === programmerProcessCount && allProgrammersRequestedReset ? "success" : "unknown";
+            const verificationMessage = verificationStatus === "success"
+                ? "OpenOCD verify s'est terminé sans erreur détectée."
+                : verificationStatus === "unknown" ? "Aucune preuve suffisante de vérification indépendante." : "Vérification non lancée.";
+            const resetMessage = resetStatus === "success"
+                ? "La commande de reset a été acceptée par le backend; le reset physique n'est pas observé."
+                : resetStatus === "unknown" ? "L'acceptation du reset n'est pas confirmée séparément." : "Reset non lancé.";
+            recordOperation("programming", {
+                status: programmingStatus,
+                command,
+                message: programmingMessage,
+                startedAt: programmingStartedAt || operationStartedAt,
+                completedAt: operationCompletedAt,
+                runtimeMs: Math.max(0, operationCompletedAt - (programmingStartedAt || operationStartedAt)),
+            });
+            recordOperation("verification", { status: verificationStatus, command, message: verificationMessage, completedAt: operationCompletedAt });
+            recordOperation("reset", { status: resetStatus, command, message: resetMessage, completedAt: operationCompletedAt });
+            recordOperation("artifactValidation", {
+                ...operationSnapshot.operations.artifactValidation,
+                status: artifactValidationFailed ? "failed" : artifactValidationAttempted ? "unknown" : "skipped",
+                message: artifactValidationFailed
+                    ? operationSnapshot.operations.artifactValidation.message || "Artefact requis absent."
+                    : artifactValidationAttempted
+                        ? "Fichier présent; provenance et fraîcheur non vérifiées."
+                        : "Validation non lancée.",
+                completedAt: operationCompletedAt,
+            });
+            recordOperation("execution", { status: "unknown", command, message: "Le retour du backend ne confirme pas le démarrage du firmware.", completedAt: operationCompletedAt });
+        }
+        if (debugRequested) {
+            const debugStatus = debugSessionSucceeded ? "success" :
+                buildOperationStatus === "failed" || buildOperationStatus === "skipped" ? "skipped" : "failed";
+            recordOperation("debugSession", {
+                status: debugStatus,
+                command,
+                message: debugSessionSucceeded
+                    ? "Session Debug démarrée; l'exécution du firmware n'est pas confirmée."
+                    : debugStatus === "skipped" ? "Session Debug non lancée car le build a échoué ou a été bloqué." : operationFailureMessage || "La session Debug n'a pas démarré.",
+                startedAt: debugSessionStartedAt || operationStartedAt,
+                completedAt: operationCompletedAt,
+                runtimeMs: debugSessionStartedAt ? Math.max(0, operationCompletedAt - debugSessionStartedAt) : 0,
+            });
+            recordOperation("execution", { status: "unknown", command, message: "Le démarrage d'une session Debug ne confirme pas l'exécution du firmware.", completedAt: operationCompletedAt });
+        }
+        if (buildRequested && buildOperationStatus !== "not-run") {
+            operationSnapshot = {
+                ...operationSnapshot,
+                build: {
+                    ...operationSnapshot.build,
+                    lastBuildTime: new Date(operationStartedAt).toLocaleString(),
+                    lastBuildSuccess: buildOperationStatus === "success",
+                    buildRuntimeMs: Math.max(0, (buildFinishedAt || operationCompletedAt) - (operationSnapshot.operations.build.startedAt || operationStartedAt)),
+                    errors: buildParsed.errors,
+                    warnings: buildParsed.warnings,
+                    flashUsage: buildParsed.flashUsage,
+                    ramUsage: buildParsed.ramUsage,
+                    elfGenerated: buildParsed.elfGenerated,
+                    binGenerated: buildParsed.binGenerated,
+                },
+            };
+        }
+        if (programmingRequested) {
+            const fullyConfirmed = (0, operationHistory_1.isFlashFullyConfirmed)(operationSnapshot.operations);
+            operationSnapshot = {
+                ...operationSnapshot,
+                flash: {
+                    ...operationSnapshot.flash,
+                    lastFlashTime: new Date(operationStartedAt).toLocaleString(),
+                    lastFlashSuccess: fullyConfirmed,
+                    flashRuntimeMs: Math.max(0, operationCompletedAt - (programmingStartedAt || operationStartedAt)),
+                    method: programmerProcessCount === 0 ? "--" : openOcdProgrammerUsed ? "OpenOCD" : "st-flash",
+                    targetMCU: toolStatus.architecture.device,
+                },
+            };
+        }
+        this.rememberProjectOperationSnapshot(projectDir, operationSnapshot);
         if (toolStatus.projectPath !== getQc1Status(this.context).projectPath) {
             progressManager.finish(false, "Projet changé : résultat non attribué au nouveau projet.");
             syncDashboardState(this.context);
@@ -2478,45 +2760,15 @@ class QC1PanelProvider {
             this.postStatus("Projet changé : opération restante annulée", "error");
             return;
         }
-        const resultMessage = success ? `${command} terminé` : "Commande échouée";
+        const flashFullyConfirmed = programmingRequested && (0, operationHistory_1.isFlashFullyConfirmed)(operationSnapshot.operations);
+        const resultMessage = !success
+            ? "Commande échouée"
+            : flashFullyConfirmed
+                ? `${command} : programmation vérifiée et reset accepté; démarrage du firmware non confirmé.`
+                : programmingRequested
+                    ? `${command} : chaîne de processus terminée; statut final Flash non confirmé (validation artefact, vérification ou reset incomplet).`
+                    : `${command} terminé`;
         progressManager.finish(success, resultMessage);
-        const runtimeMs = dashboardState.progress.runtimeSeconds * 1000;
-        dashboardState = {
-            ...dashboardState,
-            build: {
-                ...dashboardState.build,
-                errors: parsed.errors,
-                warnings: parsed.warnings,
-                flashUsage: parsed.flashUsage,
-                ramUsage: parsed.ramUsage,
-                elfGenerated: parsed.elfGenerated,
-                binGenerated: parsed.binGenerated
-            }
-        };
-        if (["build", "rebuild", "tsmake", "flash", "debug", "run"].includes(action)) {
-            dashboardState = {
-                ...dashboardState,
-                build: {
-                    ...dashboardState.build,
-                    lastBuildTime: new Date().toLocaleString(),
-                    lastBuildSuccess: success,
-                    buildRuntimeMs: runtimeMs
-                }
-            };
-        }
-        if (["flash", "run"].includes(action)) {
-            dashboardState = {
-                ...dashboardState,
-                flash: {
-                    ...dashboardState.flash,
-                    lastFlashTime: new Date().toLocaleString(),
-                    lastFlashSuccess: success,
-                    flashRuntimeMs: runtimeMs,
-                    method: fullOutput.toLowerCase().includes("openocd") ? "OpenOCD" : "st-flash",
-                    targetMCU: toolStatus.architecture.device
-                }
-            };
-        }
         const failureCause = parsed.explanation || (failedResult?.error instanceof Error
             ? failedResult.error.message
             : "La commande QC1 a retourné un résultat invalide");
@@ -2535,7 +2787,7 @@ class QC1PanelProvider {
                     stdout: stdoutText,
                     stderr: stderrText
                 });
-        dashboardState = (0, dashboardState_1.finishProgress)(dashboardState, success, "QC1-CMD-OK", commandError?.code || "QC1-CMD-001", ["build", "rebuild", "tsmake", "flash", "debug", "run"].includes(action) ? "BUILD_SUCCESS" : "COMMAND_DONE", commandError?.title || "COMMANDE_ECHOUEE", resultMessage, success ? "Commande terminée sans erreur détectée" : failureCause, projectDir);
+        dashboardState = (0, dashboardState_1.finishProgress)(dashboardState, success, "QC1-CMD-OK", commandError?.code || "QC1-CMD-001", ["build", "rebuild", "tsmake"].includes(action) && success ? "BUILD_SUCCESS" : "COMMAND_DONE", commandError?.title || (success ? "COMMANDE_TERMINEE" : "COMMANDE_ECHOUEE"), resultMessage, success ? resultMessage : failureCause, projectDir);
         syncDashboardState(this.context);
         await this.refreshArtifacts();
         if (commandError) {
@@ -2543,12 +2795,12 @@ class QC1PanelProvider {
             this.appendQc1Error(commandError, "commande");
         }
         else {
-            this.appendOutput(`[QC1] ${command} terminé avec succès`, "stdout");
+            this.appendOutput(`[QC1] ${resultMessage}`, "stdout");
         }
         this.sendDashboardState();
         this.sendAnalysis(parsed);
         this.sendTerminalMeta();
-        this.postStatus(success ? `Terminé : ${command}` : `Échec : ${command}`, success ? "success" : "error");
+        this.postStatus(success ? resultMessage : `Échec : ${command}`, success ? "success" : "error");
         this.appendOutput("--- terminé ---", "separator");
     }
     /** Applique et transmet une mesure du ProgressManager sans recréer la Webview. */

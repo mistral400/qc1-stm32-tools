@@ -75,8 +75,14 @@ test("manager integration: scopes, external projects, restart, watchers and manu
   assert.equal(provider.discovery.snapshot.stale, false, "generated build files do not invalidate discovery");
   watchers[0].changed(uri(path.join(external, "CMakeLists.txt")));
   assert.equal(provider.discovery.snapshot.stale, true);
+  const externalHistory = provider.projectOperationSnapshot(external);
+  externalHistory.build.lastBuildSuccess = true;
+  externalHistory.operations.build = { status: "success", command: "build", message: "build passé" };
+  provider.rememberProjectOperationSnapshot(external, externalHistory);
   const oldWatchers = [...watchers];
   await provider.updateProjectSettings({ projectPath: other });
+  assert.equal(provider.projectOperationSnapshot(external).operations.build.status, "success", "a project keeps its own operation result when it is deselected");
+  assert.equal(provider.projectOperationSnapshot(other).operations.build.status, "not-run", "a newly selected project does not inherit another project's build result");
   assert.ok(oldWatchers.every((watcher) => watcher.disposed));
   provider.buildRunning = true;
   const probeMessages = [];
