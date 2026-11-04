@@ -30,6 +30,15 @@ test("dashboard navigation exposes five labelled tabs and hides inactive panels 
   assert.match(dashboardClient, /event\.key==='Home'/);
 });
 
+test("editor dashboard starts on the requested page and can be navigated by the host", () => {
+  const html = getDashboardHtml(defaultDashboardState, "diagnosticsPanel");
+  assert.match(html, /data-initial-panel="diagnosticsPanel"/);
+  assert.match(html, /id="diagnosticsTab"[^>]*aria-selected="true"[^>]*tabindex="0"/);
+  assert.match(html, /id="diagnosticsPanel"[^>]*aria-hidden="false"(?! hidden)/);
+  assert.match(dashboardClient, /msg\.type==='navigate' && routes\.includes\(msg\.panel\)/);
+  assert.match(dashboardClient, /msg\.type==='outputSnapshot'/);
+});
+
 test("F1 build actions distinguish the primary build and keep maintenance actions advanced", () => {
   const html = renderBuildView(stateFor("STM32F1"));
   assert.match(html, /class="action-primary" data-action="command" data-command="build"/);

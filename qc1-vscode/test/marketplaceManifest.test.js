@@ -24,3 +24,12 @@ test("Marketplace metadata and probe selection command are packaged", () => {
   for (const file of ["ARCHITECTURE.md", "INSTALLATION.md", "BUILD_FLASH_DEBUG.md", "MULTI_PROJECT.md", "DIAGNOSTICS.md", "TESTING.md", "COMPATIBILITY_MATRIX.md", "MARKETPLACE_READINESS.md", "QC1_AUDIT.md"])
     assert.ok(fs.existsSync(path.join(root, "docs", file)), `missing docs/${file}`);
 });
+
+test("hybrid explorer and editor dashboard are contributed and activated", () => {
+  assert.ok(manifest.activationEvents.includes("onView:qc1.explorer"));
+  assert.ok(manifest.activationEvents.includes("onCommand:qc1.openDashboard"));
+  assert.ok(manifest.contributes.views.qc1.some((view) => view.id === "qc1.explorer" && !view.type));
+  assert.ok(manifest.contributes.views.qc1.some((view) => view.id === "qc1.panel" && view.type === "webview"));
+  assert.ok(manifest.contributes.commands.some((command) => command.command === "qc1.openDashboard"));
+  assert.ok(manifest.contributes.menus.commandPalette.some((entry) => entry.command === "qc1.openDashboard"));
+});

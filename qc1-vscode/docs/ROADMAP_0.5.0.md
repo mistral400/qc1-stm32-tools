@@ -43,7 +43,7 @@ Les deux tests ignorés nécessitent `QC1_CUBE_H7_PATH` (installation locale STM
 
 ## État de travail
 
-Inspection et baseline terminées. Jalons 0.4.1 à 0.4.4 sont validés et checkpointés. Le jalon 0.4.5 est implémenté et validé par les contrôles logiciels et le smoke VS Code; inspection visuelle du rendu et validation multiplateforme non effectuées. Prochain jalon : **0.4.6 — navigation hybride VS Code / Webview**.
+Inspection et baseline terminées. Jalons 0.4.1 à 0.4.5 sont validés et checkpointés. Le jalon 0.4.6 est implémenté et validé par les tests logiciels et le smoke VS Code; validation visuelle non effectuée. Prochain jalon : **0.4.7 — UART, historique et diagnostics guidés**.
 
 ### Jalon validé et checkpointé localement — 0.4.1
 
@@ -96,4 +96,16 @@ Inspection et baseline terminées. Jalons 0.4.1 à 0.4.4 sont validés et checkp
 - Validation logicielle : `npm test` PASS (175 réussis, 2 ignorés, 177 total), `npm run typecheck` PASS, `npm run lint` PASS, `git diff --check` PASS.
 - VS Code 1.144.1 / macOS arm64, fenêtre sans workspace : activation et commandes publiques PASS (1 test). Le rendu à 320/400/600 px, le zoom 200 %, les autres OS et les thèmes ne sont pas inspectés visuellement.
 - Packaging local PASS : `qc1-stm32-tools-0.4.5.vsix` (107 fichiers, environ 361 KB); intégrité ZIP et version 0.4.5 du manifeste confirmées. Le checkpoint Git local est créé après validation.
+- Aucun test matériel ni CI distante; inspection visuelle et validation sur Windows/Linux restent à faire.
+
+### Jalon 0.4.6 — navigation hybride TreeView / Webview
+
+- `src/dashboard/dashboardTreeModel.ts` projette le `DashboardState` partagé en une arborescence compacte Projets, Artefacts, Diagnostics priorisés, Matériel/outils et sessions. Cette projection ne détient pas d'état métier ni d'actions simulées.
+- `QC1DashboardTreeProvider` expose la projection avec icônes, descriptions, infobulles, accessibilité et rafraîchissement depuis le même état d'hôte.
+- La sélection d'un candidat/récent est vérifiée contre les collections courantes avant réutilisation du contrôleur projet. Les catégories TreeView ouvrent la page Webview liée.
+- `Ouvrir QC1 Dashboard` crée ou révèle un `WebviewPanel`; il réutilise le renderer sécurisé/CSP et le routeur existant. Les mises à jour et actions sont partagées entre le Webview latéral et le panneau éditeur, qui reçoit aussi un instantané du tampon terminal borné à l'ouverture.
+- Documentation README/architecture/changelog mise à jour; commandes existantes conservées.
+- Validation logicielle : `npm test` PASS (180 réussis, 2 ignorés, 182 total), `npm run typecheck` PASS, `npm run lint` PASS, `git diff --check` PASS.
+- VS Code 1.144.1 / macOS arm64 : activation, commandes publiques, ouverture/réouverture du dashboard éditeur et ouverture du conteneur QC1 PASS (1 smoke test). Aucune inspection visuelle de la TreeView ou du panneau éditeur, aucun test Windows/Linux ou matériel.
+- Packaging local PASS : `qc1-stm32-tools-0.4.6.vsix` (111 fichiers, environ 370 KB); intégrité ZIP, modules TreeView et version 0.4.6 du manifeste vérifiés. Le checkpoint Git local est créé après validation.
 - Aucun test matériel ni CI distante; inspection visuelle et validation sur Windows/Linux restent à faire.

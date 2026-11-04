@@ -2,7 +2,7 @@
   "name": "qc1-stm32-tools",
   "displayName": "QC1 STM32 Tools",
   "description": "Outils STM32F1 et STM32H7 dual-core pour VS Code",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "publisher": "Mistral400",
   "icon": "media/icon.png",
   "repository": {
@@ -47,6 +47,8 @@
   ],
   "activationEvents": [
     "onView:qc1.panel",
+    "onView:qc1.explorer",
+    "onCommand:qc1.openDashboard",
     "workspaceContains:CMakeLists.txt",
     "workspaceContains:**/*.ioc",
     "workspaceContains:**/*.eww",
@@ -80,6 +82,10 @@
     },
     "views": {
       "qc1": [
+        {
+          "id": "qc1.explorer",
+          "name": "Explorateur QC1"
+        },
         {
           "id": "qc1.panel",
           "name": "STM32 Tools",
@@ -221,6 +227,12 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "qc1.openDashboard",
+        "title": "Ouvrir QC1 Dashboard",
+        "category": "QC1 STM32",
+        "icon": "$(open-preview)"
+      },
+      {
         "command": "qc1.dev",
         "title": "QC1: Dev Mode"
       }
@@ -283,12 +295,20 @@
         },
         {
           "command": "qc1.createDiagnosticReport"
+        },
+        {
+          "command": "qc1.openDashboard"
         }
       ],
       "view/title": [
         {
           "command": "qc1.refresh",
           "when": "view == qc1.panel",
+          "group": "navigation"
+        },
+        {
+          "command": "qc1.openDashboard",
+          "when": "view == qc1.panel || view == qc1.explorer",
           "group": "navigation"
         }
       ],

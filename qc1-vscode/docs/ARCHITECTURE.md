@@ -4,14 +4,18 @@
 
 ```mermaid
 flowchart LR
-  UI[Dashboard WebView] --> BRIDGE[webviewMessages]
+  UI[Sidebar / Editor WebView] --> BRIDGE[webviewMessages]
   BRIDGE --> HOST[extension.ts adapter VS Code]
+  TREE[QC1 TreeView] --> TREECMD[Validated VS Code commands]
+  TREECMD --> HOST
   HOST --> PROJECT[projectScanner / projectDiscovery]
   HOST --> PROCESS[processTools]
   HOST --> HW[hardware / probeSelection]
   HOST --> REPORT[diagnosticReport]
   HOST --> STATE[dashboardState]
   STATE --> UI
+  STATE --> TREEMODEL[dashboardTreeModel]
+  TREEMODEL --> TREE
 ```
 
 `src/extension.ts` est l'adaptateur principal avec des responsabilités encore larges : lecture des réglages VS Code, photographie du projet et des outils, routage des commandes, pipeline build/flash/debug, rapports et synchronisation du dashboard. Il s'appuie sur des modules métier pour les opérations qui ont déjà une frontière stable. Le fichier fait environ 2 900 lignes; son extraction doit rester progressive et préserver les pipelines existants.
@@ -24,13 +28,13 @@ flowchart LR
 | Exécution externe | `processTools.ts` | Résolution d'exécutables et processus sans shell avec sorties bornées, timeout et annulation |
 | Matériel et probes | `hardware.ts`, `probeSelection.ts` | Arguments OpenOCD/st-flash/Cortex-Debug, inventaire ST-Link, association par projet et masquage des numéros |
 | État et contrôleurs | `projectDiscoveryController.ts`, `projectConfiguration.ts`, `recentProjectsController.ts`, `projectArtifacts.ts` | Découverte annulable, écritures ordonnées, récents et inspection non destructive d'artefacts |
-| Interface | `src/dashboard/` | État typé, rendu échappé, client statique, styles et contrat de messages |
+| Interface | `src/dashboard/` | État typé, rendu échappé, client statique, styles, projection TreeView et contrat de messages |
 | Rapports | `diagnosticReport.ts`, `systemInspection.ts`, `extensionInventory.ts` | Rapport versionné et anonymisation des données collectées |
 | Moteur F1 intégré | `resources/cmake/` | Projet CMake/Ninja et toolchain ARM intégrés pour STM32F1 |
 
 ## Flux de commande
 
-1. Une commande de la palette ou une action du dashboard passe par la liste blanche de `webviewMessages.ts` ou un enregistrement VS Code.
+1. Une commande de la palette, une sélection de TreeView ou une action du dashboard passe par un enregistrement VS Code ou la liste blanche de `webviewMessages.ts`.
 2. `getQc1Status()` prend une photographie du projet actif, de l'architecture, des artefacts et des outils.
 3. Les diagnostics bloquants sont affichés avant lancement. Les chemins d'exécution et arguments restent séparés; aucun shell n'est utilisé.
 4. Chaque processus retourne code de sortie, stdout, stderr, erreur de lancement, timeout et statut. Une sortie sur stderr seule ne signifie pas échec.
@@ -51,13 +55,14 @@ Le mapping conservé contient au plus 50 associations récentes. Les entrées ma
 
 La découverte a une génération, une annulation et des résultats obsolètes ignorés. Les scans sont bornés et sans polling. La configuration du projet actif est comparée avant les étapes d'une opération; si elle change, QC1 annule les étapes restantes. Le numéro de sonde choisi pendant le précontrôle est intégré à l'empreinte avant d'exécuter le flash.
 
-L'état de navigation des onglets appartient à la WebView. La sélection de projet et les probes ne sont pas stockées dans les messages du client; la sélection de probe est lue et écrite par l'hôte.
+`dashboardState` dans l'hôte reste l'unique source de vérité métier. `dashboardTreeModel.ts` en produit une projection en lecture seule; les sélections de candidats/récents sont revalidées par `QC1PanelProvider`. Les Webviews de la barre latérale et de l'éditeur reçoivent les mêmes mises à jour et utilisent le même routeur de messages. Elles ne conservent que leur navigation et les champs de formulaire non enregistrés. Le terminal QC1 est réhydraté depuis le tampon borné partagé lorsque le dashboard éditeur est ouvert ou réouvert.
 
 ## Principes de sécurité
 
 - Exécution avec `spawn` et `shell: false`; chemins/arguments validés pour CMake, ST-Link et l'argument Tcl OpenOCD.
 - Workspace Trust contrôlé avant les commandes externes et la collecte de matériel.
 - WebView avec CSP, script statique à nonce, rendu échappé et messages à schéma fermé.
+- Les chemins d'artefacts montrés dans la TreeView proviennent de l'état interne; les sélections de projet reçues par les commandes sont validées contre les candidats et projets récents actuels.
 - Rapport et journaux bornés; chemins personnels et secrets connus sont masqués. Les numéros de série ST-Link sont masqués dans la sortie et les lignes de commande.
 - Le précontrôle de sélection ne programme, n'efface, ne reset et ne halt pas le MCU.
 

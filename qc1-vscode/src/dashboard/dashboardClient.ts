@@ -16,7 +16,7 @@ function route(id) {
   });
   vscode.setState({...vscode.getState(),activePanel:id});
 }
-route(vscode.getState()?.activePanel || 'projectPanel');
+route(vscode.getState()?.activePanel || document.body.dataset.initialPanel || 'projectPanel');
 document.querySelector('[role=tablist]').addEventListener('keydown',event=>{
   const tabs=[...document.querySelectorAll('[role=tab][data-panel]')];
   const current=tabs.indexOf(document.activeElement);if(current<0) return;
@@ -83,6 +83,7 @@ function settings(config) {
 }
 window.addEventListener('message',event=>{
   const msg=event.data;if(!msg || typeof msg!=='object') return;
+  if(msg.type==='navigate' && routes.includes(msg.panel)) {route(msg.panel);return;}
   if(msg.type==='dashboardState') {renderViews(msg.views);text('heroProject',msg.state.projectName);text('heroLastCommand',msg.state.lastCommand);}
   if(msg.type==='projectDiscovery') renderViews(msg.views);
   if(msg.type==='progress') progress(msg.progress);
@@ -92,6 +93,10 @@ window.addEventListener('message',event=>{
   if(msg.type==='output') {
     const output=document.getElementById('output');
     output.textContent=(output.textContent+'\\n'+(msg.lines||[]).join('\\n')).split('\\n').slice(-5000).join('\\n');output.scrollTop=output.scrollHeight;
+  }
+  if(msg.type==='outputSnapshot') {
+    const output=document.getElementById('output');
+    if(output) {output.textContent=(msg.lines||[]).join('\\n')||'QC1 prêt.';output.scrollTop=output.scrollHeight;}
   }
   if(msg.type==='terminalMeta') {text('terminalProject',msg.meta.projectName);text('terminalLastCommand',msg.meta.lastCommand);}
   if(msg.type==='analysis') {

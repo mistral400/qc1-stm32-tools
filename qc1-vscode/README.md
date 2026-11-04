@@ -7,10 +7,11 @@ L'import CubeIDE exige le HAL, CMSIS Core, le header CMSIS Device exact et le BS
 ## Démarrage rapide
 
 1. Installe QC1 depuis le VSIX de la version livrée, ou utilise **Install from VSIX…** dans VS Code.
-2. Ouvre le dossier STM32, puis l'icône **QC1 STM32** dans la barre latérale.
-3. Dans **Projet**, détecte les projets ou choisis leur dossier, puis sélectionne le projet actif.
-4. Dans **Outils**, utilise **Choisir la sonde** pour associer une ST-Link au projet. Quand plusieurs sondes sont présentes, QC1 demande un choix explicite.
-5. Vérifie les outils détectés et lance **Build Project**. Lance **Flash STM32** seulement après avoir vérifié la carte, le câblage et l'alimentation.
+2. Ouvre le dossier STM32, puis l'icône **QC1 STM32** dans la barre latérale. L'**Explorateur QC1** présente les projets, artefacts, diagnostics, outils et sessions connus.
+3. Utilise **Ouvrir QC1 Dashboard** dans la palette de commandes pour ouvrir le tableau de bord complet dans un onglet de l'éditeur; tu peux aussi sélectionner une catégorie de l'Explorateur pour ouvrir la page correspondante.
+4. Dans **Projet**, détecte les projets ou choisis leur dossier, puis sélectionne le projet actif.
+5. Dans **Outils**, utilise **Choisir la sonde** pour associer une ST-Link au projet. Quand plusieurs sondes sont présentes, QC1 demande un choix explicite.
+6. Vérifie les outils détectés et lance **Build Project**. Lance **Flash STM32** seulement après avoir vérifié la carte, le câblage et l'alimentation.
 
 QC1 mémorise la sonde choisie par projet. Il transmet son numéro de série à OpenOCD ou `st-flash`; les journaux n'affichent qu'un suffixe. Avant flash/debug, QC1 vérifie la famille de cible quand OpenOCD fournit une cible reconnue. Sans preuve suffisante, l'opération est arrêtée. Le nom de carte affiché provient des fichiers du projet : il ne prouve pas quelle carte physique est connectée.
 

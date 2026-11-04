@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.6 - 2026-11-04
+
+- Add a native QC1 Explorer TreeView for the active/recent/detected projects, artifacts, prioritized diagnostics, essential tools, ST-Link and known sessions.
+- Add **Ouvrir QC1 Dashboard** to open the complete shared dashboard in an editor tab; route links from the Explorer open the relevant page.
+- Reuse the same host-owned DashboardState, Webview renderer, validated message router and bounded terminal buffer across sidebar and editor surfaces.
+- Revalidate TreeView project selections against current candidates/recent projects and retain all existing command IDs.
+- Add tests for the read-only tree projection, diagnostics ordering, dashboard deep links, manifest contributions and provider refresh behavior.
+- Extension Host smoke opened and reopened the editor dashboard. No hardware commands or physical tests were run; visual rendering was not inspected.
+
 ## 0.4.5 - 2026-11-04
 
 - Compact the five dashboard routes through 600 px and add labelled, keyboard-operable tab navigation.

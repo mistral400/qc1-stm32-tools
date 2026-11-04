@@ -57,6 +57,7 @@ const coreBuild_1 = require("./qc1/coreBuild");
 const extensionInventory_1 = require("./qc1/extensionInventory");
 const dashboardState_1 = require("./dashboard/dashboardState");
 const dashboardHtml_1 = require("./dashboard/dashboardHtml");
+const dashboardTreeProvider_1 = require("./dashboard/dashboardTreeProvider");
 const progressManager_1 = require("./dashboard/progressManager");
 const qc1Parser_1 = require("./qc1/qc1Parser");
 const projectDiscovery_1 = require("./qc1/projectDiscovery");
@@ -78,15 +79,20 @@ const operationCoordinator_1 = require("./qc1/operationCoordinator");
 const artifactValidation_1 = require("./qc1/artifactValidation");
 const hardwareResources_1 = require("./qc1/hardwareResources");
 const resetConfiguration_1 = require("./qc1/resetConfiguration");
-// État partagé entre le contrôleur et la Webview QC1.
+// État métier unique partagé par les Webviews QC1 et la TreeView native.
 let dashboardState = dashboardState_1.defaultDashboardState;
-let dashboardPanel;
+const dashboardWebviews = new Set();
+let dashboardTreeProvider;
 let outputChannel;
 let stlinkProbeStatus = "non testé";
 let stlinkProbeModel = "unknown";
 let stlinkCheckedAt;
 let embeddedCmakePath = "";
 let embeddedGccPath = "";
+function isDashboardPanelId(value) {
+    return value === "projectPanel" || value === "buildPanel" || value === "toolsPanel"
+        || value === "diagnosticsPanel" || value === "settingsPanel";
+}
 let embeddedNinjaPath = "";
 const hardwareResources = new hardwareResources_1.HardwareResourceCoordinator();
 const debugResourceIds = new Map();
@@ -1363,12 +1369,15 @@ function runSpawnedProcess(invocation, cwd, env, onStdout, onStderr) {
         ...result, command, error: (0, processTools_1.processSucceeded)(result) ? undefined : Object.assign(new Error(result.error || result.stderr || "Processus échoué"), { code: result.exitCode, killed: result.timedOut, timedOut: result.timedOut })
     }));
 }
-// === SYNCHRONISATION DE LA BARRE ET DU DASHBOARD ===========================
-/** Remplace le HTML complet par un nouveau rendu du `dashboardState`. */
+// === SYNCHRONISATION DES SURFACES QC1 ======================================
+/** Publie la photographie métier aux Webviews ouvertes et rafraîchit l'arborescence native. */
 function refreshDashboard() {
-    if (dashboardPanel) {
-        void dashboardPanel.webview.postMessage({ type: "dashboardState", state: dashboardState, views: (0, dashboardHtml_1.renderDashboardViews)(dashboardState) });
-    }
+    postDashboardMessage({ type: "dashboardState", state: dashboardState, views: (0, dashboardHtml_1.renderDashboardViews)(dashboardState) });
+    dashboardTreeProvider?.refresh();
+}
+function postDashboardMessage(message) {
+    for (const webview of dashboardWebviews)
+        void webview.postMessage(message);
 }
 /**
  * Recopie la photographie technique `Qc1Status` vers le modèle simplifié du Dashboard.
@@ -1453,6 +1462,7 @@ function syncDashboardState(context) {
             checkedPath: diagnostic.checkedPath
         }
     };
+    dashboardTreeProvider?.refresh();
 }
 function scannerDiagnostics(candidate) {
     if (!candidate)
@@ -1468,9 +1478,8 @@ function scannerDiagnostics(candidate) {
 }
 // === CONTRÔLEUR DE LA WEBVIEW QC1 ==========================================
 /**
- * Propriétaire de la vue `qc1.panel`.
- * Il reçoit les messages envoyés par le JavaScript de dashboardHtml.ts et renvoie
- * les sorties, réglages, analyses et statuts avec `webview.postMessage()`.
+ * Contrôleur partagé du Webview latéral et du tableau de bord éditeur.
+ * Les messages de ces surfaces passent par le même parseur et les mêmes opérations.
  */
 class QC1PanelProvider {
     constructor(extensionUri, context) {
@@ -1667,161 +1676,22 @@ class QC1PanelProvider {
         clearTimeout(this.refreshTimer);
         this.discovery.dispose();
         this.watchers.forEach((watcher) => watcher.dispose());
+        this.editorPanel?.dispose();
+        this.editorPanel = undefined;
         this.disposables.forEach((disposable) => disposable.dispose());
-        if (dashboardPanel === this.view)
-            dashboardPanel = undefined;
-        this.view = undefined;
     }
-    /** Appelé par VS Code lorsque la barre latérale QC1 doit être créée. */
-    resolveWebviewView(webviewView) {
-        this.view = webviewView;
-        dashboardPanel = webviewView;
-        webviewView.webview.options = {
-            enableScripts: true,
-            localResourceRoots: [this.extensionUri]
-        };
-        webviewView.webview.html = (0, dashboardHtml_1.getDashboardHtml)(dashboardState);
-        // Routeur Webview -> extension. Chaque `msg.type` provient d'un postMessage du HTML.
-        this.disposables.push(webviewView.webview.onDidReceiveMessage(async (message) => {
-            const msg = (0, webviewMessages_1.parseWebviewMessage)(message);
-            if (!msg || this.disposed)
-                return;
-            try {
-                switch (msg.type) {
-                    case "command":
-                        if (msg.command === "openLogs") {
-                            outputChannel?.show(true);
-                        }
-                        else {
-                            this.runCommand(msg.command);
-                        }
-                        break;
-                    case "run":
-                        this.runCommand(msg.command);
-                        break;
-                    case "terminal":
-                        this.runCommand(msg.command);
-                        break;
-                    case "clear":
-                        this.clearOutput();
-                        break;
-                    case "copyOutput":
-                        await vscode.env.clipboard.writeText(this.outputLines.join("\n"));
-                        this.postStatus("Output copied", "success");
-                        break;
-                    case "saveLog":
-                        await this.saveLog();
-                        break;
-                    case "createDiagnosticReport":
-                        await this.createDiagnosticReport();
-                        break;
-                    case "settings":
-                        await vscode.commands.executeCommand("workbench.action.openSettings", "@ext:Mistral400.QC1-STM32-Tools");
-                        break;
-                    case "refreshSettings":
-                        this.sendSettings();
-                        break;
-                    case "refreshTools":
-                        projectCache.clear();
-                        syncDashboardState(this.context);
-                        this.sendToolsStatus();
-                        break;
-                    case "autoDetectPaths":
-                        await this.autoDetectPaths();
-                        break;
-                    case "discoverProjects":
-                        await this.discovery.scan(this.discoveryRoots());
-                        break;
-                    case "rescanProjects":
-                        projectCache.clear();
-                        await this.discovery.rescan();
-                        syncDashboardState(this.context);
-                        await this.refreshArtifacts();
-                        this.sendDashboardState();
-                        break;
-                    case "cancelProjectScan":
-                        this.discovery.cancel();
-                        break;
-                    case "chooseProjectFolder":
-                        await this.chooseProjectFolder();
-                        break;
-                    case "useProject": {
-                        const candidate = dashboardState.projectDiscovery.candidates
-                            .map((item) => item.candidate)
-                            .find((item) => item.path === msg.projectPath);
-                        if (candidate)
-                            await this.selectProject(candidate);
-                        break;
-                    }
-                    case "updateProjectSettings":
-                        await this.updateProjectSettings(msg);
-                        break;
-                    case "useRecentProject":
-                        if (this.recent.paths().includes(msg.projectPath))
-                            await this.selectProjectPath(msg.projectPath);
-                        break;
-                    case "removeRecentProject":
-                        await this.recent.remove(msg.projectPath);
-                        await this.refreshRecentProjects();
-                        break;
-                    case "detectStlink":
-                        this.detectStlink();
-                        break;
-                    case "selectStlink":
-                        this.selectStlink();
-                        break;
-                    case "openSerial":
-                        this.openSerial();
-                        break;
-                    case "startOpenOcd":
-                        this.startOpenOcd();
-                        break;
-                    case "openArtifact": {
-                        const artifact = dashboardState.artifacts.find((item) => item.id === msg.id);
-                        if (artifact && fileExists(artifact.path))
-                            await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(artifact.path));
-                        break;
-                    }
-                    case "openDiagnosticFile": {
-                        const diagnostic = dashboardState.diagnostics[msg.index];
-                        if (diagnostic && diagnostic.checkedPath !== "--") {
-                            try {
-                                const stat = await fs.promises.stat(diagnostic.checkedPath);
-                                if (stat.isFile())
-                                    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.file(diagnostic.checkedPath)));
-                                else if (stat.isDirectory())
-                                    await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(diagnostic.checkedPath));
-                            }
-                            catch {
-                                this.postStatus("Chemin absent ou inaccessible", "error");
-                            }
-                        }
-                        break;
-                    }
-                    case "copyDiagnostic":
-                        await vscode.env.clipboard.writeText(formatDiagnostic(getQc1Status(this.context)));
-                        this.postStatus("Diagnostic copied", "success");
-                        break;
-                    case "openExtensionFolder":
-                        await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(this.context.extensionPath));
-                        break;
-                    case "openProjectFolder": {
-                        const root = getQc1Status(this.context).projectPath || getWorkspaceRoot();
-                        if (root) {
-                            await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(root));
-                        }
-                        break;
-                    }
-                }
-            }
-            catch (error) {
-                outputChannel?.appendLine(`[QC1] Action échouée: ${String(error)}`);
-                this.postStatus("Action QC1 échouée", "error");
-            }
-        }));
+    attachWebview(webview, initialPanel = "projectPanel") {
+        webview.options = { enableScripts: true, localResourceRoots: [this.extensionUri] };
+        webview.html = (0, dashboardHtml_1.getDashboardHtml)(dashboardState, initialPanel);
+        dashboardWebviews.add(webview);
+        const messages = webview.onDidReceiveMessage((message) => this.handleWebviewMessage(message));
+        return { dispose: () => { dashboardWebviews.delete(webview); messages.dispose(); } };
+    }
+    initializeWebviewState() {
         this.sendSettings();
         this.sendToolsStatus();
         this.sendTerminalMeta();
+        this.sendOutputSnapshot();
         this.sendAnalysis({
             errors: dashboardState.build.errors,
             warnings: dashboardState.build.warnings,
@@ -1839,6 +1709,177 @@ class QC1PanelProvider {
         this.publishProjectDiscovery();
         this.postStatus("Ready", "idle");
         this.initializeManager();
+    }
+    openEditorDashboard(initialPanel = "projectPanel") {
+        if (this.disposed)
+            return;
+        if (this.editorPanel) {
+            this.editorPanel.reveal(vscode.ViewColumn.Active, true);
+            void this.editorPanel.webview.postMessage({ type: "navigate", panel: initialPanel });
+            return;
+        }
+        const panel = vscode.window.createWebviewPanel("qc1.dashboard", "QC1 Dashboard", vscode.ViewColumn.Active, { enableScripts: true, localResourceRoots: [this.extensionUri] });
+        this.editorPanel = panel;
+        const attachment = this.attachWebview(panel.webview, initialPanel);
+        this.editorPanelSubscription = panel.onDidDispose(() => {
+            attachment.dispose();
+            this.editorPanelSubscription?.dispose();
+            if (this.editorPanel === panel) {
+                this.editorPanel = undefined;
+                this.editorPanelSubscription = undefined;
+            }
+        });
+        this.initializeWebviewState();
+    }
+    async selectProjectFromTree(projectPath) {
+        const candidate = dashboardState.projectDiscovery.candidates
+            .map((item) => item.candidate)
+            .find((item) => item.path === projectPath);
+        if (candidate) {
+            await this.selectProject(candidate);
+            return;
+        }
+        if (this.recent.paths().includes(projectPath))
+            await this.selectProjectPath(projectPath);
+    }
+    async handleWebviewMessage(message) {
+        const msg = (0, webviewMessages_1.parseWebviewMessage)(message);
+        if (!msg || this.disposed)
+            return;
+        try {
+            switch (msg.type) {
+                case "command":
+                    if (msg.command === "openLogs")
+                        outputChannel?.show(true);
+                    else
+                        this.runCommand(msg.command);
+                    break;
+                case "run":
+                case "terminal":
+                    this.runCommand(msg.command);
+                    break;
+                case "clear":
+                    this.clearOutput();
+                    break;
+                case "copyOutput":
+                    await vscode.env.clipboard.writeText(this.outputLines.join("\n"));
+                    this.postStatus("Output copied", "success");
+                    break;
+                case "saveLog":
+                    await this.saveLog();
+                    break;
+                case "createDiagnosticReport":
+                    await this.createDiagnosticReport();
+                    break;
+                case "settings":
+                    await vscode.commands.executeCommand("workbench.action.openSettings", "@ext:Mistral400.QC1-STM32-Tools");
+                    break;
+                case "refreshSettings":
+                    this.sendSettings();
+                    break;
+                case "refreshTools":
+                    projectCache.clear();
+                    syncDashboardState(this.context);
+                    this.sendToolsStatus();
+                    break;
+                case "autoDetectPaths":
+                    await this.autoDetectPaths();
+                    break;
+                case "discoverProjects":
+                    await this.discovery.scan(this.discoveryRoots());
+                    break;
+                case "rescanProjects":
+                    projectCache.clear();
+                    await this.discovery.rescan();
+                    syncDashboardState(this.context);
+                    await this.refreshArtifacts();
+                    this.sendDashboardState();
+                    break;
+                case "cancelProjectScan":
+                    this.discovery.cancel();
+                    break;
+                case "chooseProjectFolder":
+                    await this.chooseProjectFolder();
+                    break;
+                case "useProject": {
+                    const candidate = dashboardState.projectDiscovery.candidates
+                        .map((item) => item.candidate)
+                        .find((item) => item.path === msg.projectPath);
+                    if (candidate)
+                        await this.selectProject(candidate);
+                    break;
+                }
+                case "updateProjectSettings":
+                    await this.updateProjectSettings(msg);
+                    break;
+                case "useRecentProject":
+                    if (this.recent.paths().includes(msg.projectPath))
+                        await this.selectProjectPath(msg.projectPath);
+                    break;
+                case "removeRecentProject":
+                    await this.recent.remove(msg.projectPath);
+                    await this.refreshRecentProjects();
+                    break;
+                case "detectStlink":
+                    this.detectStlink();
+                    break;
+                case "selectStlink":
+                    this.selectStlink();
+                    break;
+                case "openSerial":
+                    this.openSerial();
+                    break;
+                case "startOpenOcd":
+                    this.startOpenOcd();
+                    break;
+                case "openArtifact": {
+                    const artifact = dashboardState.artifacts.find((item) => item.id === msg.id);
+                    if (artifact && fileExists(artifact.path))
+                        await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(artifact.path));
+                    break;
+                }
+                case "openDiagnosticFile": {
+                    const diagnostic = dashboardState.diagnostics[msg.index];
+                    if (diagnostic && diagnostic.checkedPath !== "--") {
+                        try {
+                            const stat = await fs.promises.stat(diagnostic.checkedPath);
+                            if (stat.isFile())
+                                await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.file(diagnostic.checkedPath)));
+                            else if (stat.isDirectory())
+                                await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(diagnostic.checkedPath));
+                        }
+                        catch {
+                            this.postStatus("Chemin absent ou inaccessible", "error");
+                        }
+                    }
+                    break;
+                }
+                case "copyDiagnostic":
+                    await vscode.env.clipboard.writeText(formatDiagnostic(getQc1Status(this.context)));
+                    this.postStatus("Diagnostic copied", "success");
+                    break;
+                case "openExtensionFolder":
+                    await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(this.context.extensionPath));
+                    break;
+                case "openProjectFolder": {
+                    const root = getQc1Status(this.context).projectPath || getWorkspaceRoot();
+                    if (root)
+                        await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(root));
+                    break;
+                }
+            }
+        }
+        catch (error) {
+            outputChannel?.appendLine(`[QC1] Action échouée: ${String(error)}`);
+            this.postStatus("Action QC1 échouée", "error");
+        }
+    }
+    /** Appelé par VS Code lorsque la barre latérale QC1 doit être créée. */
+    resolveWebviewView(webviewView) {
+        const attachment = this.attachWebview(webviewView.webview);
+        this.disposables.push(attachment);
+        this.disposables.push(webviewView.onDidDispose(() => attachment.dispose()));
+        this.initializeWebviewState();
     }
     /** Regroupe les réglages exposés à l'onglet Paramètres de la Webview. */
     getConfig() {
@@ -3113,7 +3154,7 @@ class QC1PanelProvider {
                 ...progress
             }
         };
-        this.view?.webview.postMessage({ type: "progress", progress });
+        postDashboardMessage({ type: "progress", progress });
     }
     /** Copie une erreur normalisée dans la carte Diagnostic du Dashboard. */
     applyQc1Error(qc1Error, level = "error") {
@@ -3225,7 +3266,7 @@ class QC1PanelProvider {
         if (this.outputLines.length > limit) {
             this.outputLines = this.outputLines.slice(-limit);
         }
-        this.view?.webview.postMessage({
+        postDashboardMessage({
             type: "output",
             kind,
             lines
@@ -3233,7 +3274,7 @@ class QC1PanelProvider {
     }
     clearOutput() {
         this.outputLines = [];
-        this.view?.webview.postMessage({ type: "clearOutput" });
+        postDashboardMessage({ type: "clearOutput" });
         this.sendAnalysis({
             errors: 0,
             warnings: 0,
@@ -3251,21 +3292,22 @@ class QC1PanelProvider {
     // === MESSAGES EXTENSION -> JAVASCRIPT DE LA WEBVIEW ======================
     /** Met à jour les cartes finales sans effacer le terminal ou l'onglet actif. */
     sendDashboardState() {
-        this.view?.webview.postMessage({
+        postDashboardMessage({
             type: "dashboardState",
             state: dashboardState,
             views: (0, dashboardHtml_1.renderDashboardViews)(dashboardState),
         });
+        dashboardTreeProvider?.refresh();
     }
     postStatus(text, state) {
-        this.view?.webview.postMessage({
+        postDashboardMessage({
             type: "status",
             text,
             state
         });
     }
     sendSettings() {
-        this.view?.webview.postMessage({
+        postDashboardMessage({
             type: "settings",
             settings: this.getConfig()
         });
@@ -3275,7 +3317,7 @@ class QC1PanelProvider {
         this.sendDashboardState();
     }
     sendTerminalMeta() {
-        this.view?.webview.postMessage({
+        postDashboardMessage({
             type: "terminalMeta",
             meta: {
                 projectName: dashboardState.projectName,
@@ -3283,8 +3325,11 @@ class QC1PanelProvider {
             }
         });
     }
+    sendOutputSnapshot() {
+        postDashboardMessage({ type: "outputSnapshot", lines: [...this.outputLines] });
+    }
     sendAnalysis(parsed) {
-        this.view?.webview.postMessage({
+        postDashboardMessage({
             type: "analysis",
             analysis: {
                 errors: parsed.errors,
@@ -3299,11 +3344,12 @@ class QC1PanelProvider {
         return (0, projectUiState_1.buildDiscoveryRoots)(getWorkspaceRoots(), this.discovery.snapshot.selectedPath, this.recent.paths(), config.get("discoveryRoots", []));
     }
     publishProjectDiscovery() {
-        this.view?.webview.postMessage({
+        postDashboardMessage({
             type: "projectDiscovery",
             discovery: dashboardState.projectDiscovery,
             views: (0, dashboardHtml_1.renderDashboardViews)(dashboardState),
         });
+        dashboardTreeProvider?.refresh();
     }
     async chooseProjectFolder() {
         const selection = await vscode.window.showOpenDialog({
@@ -3424,6 +3470,14 @@ async function activate(context) {
     syncDashboardState(context);
     refreshDashboard();
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(QC1PanelProvider.viewType, provider));
+    dashboardTreeProvider = new dashboardTreeProvider_1.QC1DashboardTreeProvider(() => dashboardState);
+    context.subscriptions.push(dashboardTreeProvider, vscode.window.registerTreeDataProvider(dashboardTreeProvider_1.QC1DashboardTreeProvider.viewId, dashboardTreeProvider), vscode.commands.registerCommand("qc1.openDashboard", () => provider.openEditorDashboard()), vscode.commands.registerCommand("qc1.openDashboardPage", (page) => {
+        if (isDashboardPanelId(page))
+            provider.openEditorDashboard(page);
+    }), vscode.commands.registerCommand("qc1.selectProjectFromTree", async (projectPath) => {
+        if (typeof projectPath === "string" && projectPath.trim())
+            await provider.selectProjectFromTree(projectPath);
+    }));
     // Les identifiants doivent rester identiques à `contributes.commands` dans package.json.
     context.subscriptions.push(vscode.commands.registerCommand("qc1.build", () => {
         provider.runCommand("build");
