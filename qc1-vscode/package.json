@@ -1,6 +1,6 @@
 {
   "name": "qc1-stm32-tools",
-  "displayName": "QC1 STM32 Tools",
+  "displayName": "QC1 STM32F103 CMake Tools",
   "description": "Outils STM32F1 et STM32H7 dual-core pour VS Code",
   "version": "0.5.2",
   "publisher": "Mistral400",
