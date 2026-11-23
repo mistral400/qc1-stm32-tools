@@ -1,6 +1,11 @@
 import type { ProjectSettingsInput } from "../qc1/projectConfiguration";
 import { validateResetProfile } from "../qc1/resetConfiguration";
 import type { SerialConnectionOptions, SerialDisplayMode } from "../qc1/serialMonitor";
+import { getDeviceModel, getPackagePins, getRegister } from "../regix/catalog";
+import { defaultRegixPreferences, validateRegixPreferences } from "../regix/preferences";
+import { listGpioModes } from "../regix/recipes/gpioConfiguration";
+import type { BitOperation } from "../regix/bitMath";
+import type { GpioModeId, GenerationPreferences } from "../regix/types";
 
 export const qc1Commands = [
   "build", "clean", "rebuild", "tsmake", "flash", "debug", "build-cm7", "build-cm4",
@@ -23,7 +28,13 @@ export type WebviewMessage =
   | { type: "serialConnect"; options: SerialConnectionOptions }
   | { type: "serialSend"; text: string; mode: SerialDisplayMode; appendNewline: boolean }
   | { type: "serialDisplay"; mode: SerialDisplayMode; timestamps: boolean }
-  | { type: "serialGraphControl"; action: "pause" | "resume" | "clear" | "exportCsv" };
+  | { type: "serialGraphControl"; action: "pause" | "resume" | "clear" | "exportCsv" }
+  | { type: "regixSelectRegister"; registerId: string }
+  | { type: "regixSavePreferences"; preferences: Partial<GenerationPreferences> }
+  | { type: "regixGenerate"; deviceId: string; pinId: string; modeId: GpioModeId }
+  | { type: "regixOpenPreview"; target: "snippet" | "header" | "source" | "all"; deviceId: string; pinId: string; modeId: GpioModeId }
+  | { type: "regixCopyPreview"; target: "snippet" | "header" | "source"; deviceId: string; pinId: string; modeId: GpioModeId }
+  | { type: "regixCalculate"; operation: BitOperation; left: string; right: string; offset: number; width: number };
 
 /** Validate the bridge at runtime; project content cannot invent commands or paths. */
 export function parseWebviewMessage(value: unknown): WebviewMessage | undefined {
@@ -73,6 +84,46 @@ export function parseWebviewMessage(value: unknown): WebviewMessage | undefined 
   }
   if (input.type === "serialGraphControl" && ["pause", "resume", "clear", "exportCsv"].includes(String(input.action)))
     return { type: "serialGraphControl", action: input.action as "pause" | "resume" | "clear" | "exportCsv" };
+  if (input.type === "regixSelectRegister") {
+    if (typeof input.registerId !== "string" || input.registerId.length > 64) return;
+    try { getRegister(input.registerId); } catch { return; }
+    return { type: "regixSelectRegister", registerId: input.registerId };
+  }
+  if (input.type === "regixSavePreferences") {
+    if (!input.preferences || typeof input.preferences !== "object" || Array.isArray(input.preferences)) return;
+    const changes = input.preferences as Record<string, unknown>;
+    const keys = Object.keys(defaultRegixPreferences);
+    if (Object.keys(changes).length === 0 || Object.keys(changes).some((key) => !keys.includes(key))) return;
+    const preferences: Partial<GenerationPreferences> = {};
+    try {
+      for (const key of Object.keys(changes) as Array<keyof GenerationPreferences>)
+        preferences[key] = validateRegixPreferences({ ...defaultRegixPreferences, [key]: changes[key] })[key] as never;
+    } catch { return; }
+    return { type: "regixSavePreferences", preferences };
+  }
+  if (input.type === "regixGenerate" || input.type === "regixOpenPreview" || input.type === "regixCopyPreview") {
+    if (typeof input.deviceId !== "string" || typeof input.pinId !== "string" || typeof input.modeId !== "string") return;
+    if (input.deviceId.length > 32 || input.pinId.length > 8 || input.modeId.length > 64) return;
+    if (input.type !== "regixGenerate" && typeof input.target !== "string") return;
+    try {
+      getDeviceModel(input.deviceId);
+      if (!getPackagePins(input.deviceId).some((pin) => pin.name === input.pinId)) return;
+    } catch { return; }
+    if (!listGpioModes().some((mode) => mode.id === input.modeId)) return;
+    if (input.type === "regixGenerate") return { type: "regixGenerate", deviceId: input.deviceId, pinId: input.pinId, modeId: input.modeId as GpioModeId };
+    const targets = input.type === "regixCopyPreview" ? ["snippet", "header", "source"] : ["snippet", "header", "source", "all"];
+    if (!targets.includes(input.target as string)) return;
+    if (input.type === "regixCopyPreview")
+      return { type: "regixCopyPreview", target: input.target as "snippet" | "header" | "source", deviceId: input.deviceId, pinId: input.pinId, modeId: input.modeId as GpioModeId };
+    return { type: "regixOpenPreview", target: input.target as "snippet" | "header" | "source" | "all", deviceId: input.deviceId, pinId: input.pinId, modeId: input.modeId as GpioModeId };
+  }
+  if (input.type === "regixCalculate") {
+    const operations: BitOperation[] = ["and", "or", "xor", "not", "readBits"];
+    if (!operations.includes(input.operation as BitOperation) || typeof input.left !== "string" || typeof input.right !== "string" ||
+        input.left.length > 64 || input.right.length > 64 || !Number.isInteger(input.offset) || !Number.isInteger(input.width) ||
+        Number(input.offset) < 0 || Number(input.offset) > 31 || Number(input.width) < 1 || Number(input.width) > 32) return;
+    return { type: "regixCalculate", operation: input.operation as BitOperation, left: input.left, right: input.right, offset: Number(input.offset), width: Number(input.width) };
+  }
   if (input.type === "updateProjectSettings") {
     if (typeof input.projectPath !== "string" || typeof input.buildType !== "string" || typeof input.cmakePreset !== "string") return;
     const result: ProjectSettingsInput = { projectPath: input.projectPath, buildType: input.buildType, cmakePreset: input.cmakePreset };

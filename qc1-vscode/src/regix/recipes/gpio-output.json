@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "1.0.0",
+  "recipeVersion": "0.1.0",
+  "id": "gpio-pin-configuration",
+  "supportedPeripherals": ["RCC", "GPIO"],
+  "modes": [
+    {"id":"inputAnalog","labelFr":"Entrée analogique","labelEn":"Analog input","mode":0,"cnf":0,"output":false},
+    {"id":"inputFloating","labelFr":"Entrée flottante","labelEn":"Floating input","mode":0,"cnf":1,"output":false},
+    {"id":"inputPullUp","labelFr":"Entrée avec pull-up","labelEn":"Input with pull-up","mode":0,"cnf":2,"output":false,"odr":1},
+    {"id":"inputPullDown","labelFr":"Entrée avec pull-down","labelEn":"Input with pull-down","mode":0,"cnf":2,"output":false,"odr":0},
+    {"id":"outputPushPull2MHz","labelFr":"Sortie push-pull 2 MHz","labelEn":"Push-pull output 2 MHz","mode":2,"cnf":0,"output":true,"speedMHz":2},
+    {"id":"outputPushPull10MHz","labelFr":"Sortie push-pull 10 MHz","labelEn":"Push-pull output 10 MHz","mode":1,"cnf":0,"output":true,"speedMHz":10},
+    {"id":"outputPushPull50MHz","labelFr":"Sortie push-pull 50 MHz","labelEn":"Push-pull output 50 MHz","mode":3,"cnf":0,"output":true,"speedMHz":50},
+    {"id":"outputOpenDrain2MHz","labelFr":"Sortie open-drain 2 MHz","labelEn":"Open-drain output 2 MHz","mode":2,"cnf":1,"output":true,"speedMHz":2}
+  ]
+}

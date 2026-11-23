@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:qc1:regix:board-profiles-schema:1.0.0",
+  "title": "REGIX board profiles",
+  "type": "object",
+  "required": ["schemaVersion", "profiles", "note"],
+  "properties": {
+    "schemaVersion": {"const": "1.0.0"},
+    "profiles": {"type": "array", "items": {"type": "object", "required": ["id", "name", "deviceId", "pins", "sourceIds"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "deviceId": {"type": "string"}, "pins": {"type": "array", "items": {"type": "object", "required": ["mcuPin", "boardLabel"], "properties": {"mcuPin": {"type": "string"}, "boardLabel": {"type": "string"}}, "additionalProperties": false}}, "sourceIds": {"type": "array", "items": {"type": "string"}}}, "additionalProperties": false}},
+    "note": {"type": "string"}
+  },
+  "additionalProperties": false
+}

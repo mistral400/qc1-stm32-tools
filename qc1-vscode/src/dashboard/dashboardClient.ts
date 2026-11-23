@@ -1,7 +1,7 @@
 /** Static client script: no project values are inserted into JavaScript. */
 export const dashboardClient = `
 const vscode = acquireVsCodeApi();
-const routes = ['projectPanel','buildPanel','toolsPanel','diagnosticsPanel','settingsPanel'];
+const routes = ['projectPanel','buildPanel','toolsPanel','diagnosticsPanel','settingsPanel','regixPanel'];
 let settingsDirty = false;
 function text(id, value) { const node=document.getElementById(id); if(node) node.textContent=String(value ?? '—'); }
 function route(id) {
@@ -29,10 +29,129 @@ document.querySelector('[role=tablist]').addEventListener('keydown',event=>{
   event.preventDefault();tabs[next].focus();route(tabs[next].dataset.panel);
 });
 document.addEventListener('input',event=>{if(event.target.closest('#projectSettingsForm')) settingsDirty=true;});
+function regixPreferencesFromForm() {
+  const preferences={};
+  document.querySelectorAll('[data-regix-preference]').forEach(node=>{
+    const key=node.dataset.regixPreference;
+    preferences[key]=node.type==='checkbox'?node.checked:node.value;
+  });
+  return preferences;
+}
+function setRegixPreviewTargets(outputKind) {
+  const target=document.getElementById('regixPreviewTarget');if(!target)return;
+  target.replaceChildren();
+  const options=outputKind==='files'?[['header','Fichier .h'],['source','Fichier .c']]:[['snippet','Extrait C']];
+  options.forEach(([value,label])=>{const option=document.createElement('option');option.value=value;option.textContent=label;target.appendChild(option);});
+}
+function applyRegixPreferences(preferences) {
+  if(!preferences||typeof preferences!=='object')return;
+  document.querySelectorAll('[data-regix-preference]').forEach(node=>{
+    const key=node.dataset.regixPreference;if(!(key in preferences))return;
+    if(node.type==='checkbox')node.checked=Boolean(preferences[key]);
+    else if(document.activeElement!==node)node.value=String(preferences[key]);
+  });
+  const expert=document.getElementById('regixExpertSection');if(expert)expert.hidden=!Boolean(preferences.expertMode);
+  const opened=document.querySelectorAll('[data-action="regixOpenPreview"],[data-action="regixCopyPreview"]');
+  opened.forEach(button=>button.disabled=Boolean(preferences.previewRequired));
+  const all=document.querySelector('[data-action="regixOpenPreview"][data-target="all"]');if(all)all.disabled=Boolean(preferences.previewRequired)||preferences.outputKind!=='files';
+  if(!window.regixPreviewFiles)setRegixPreviewTargets(preferences.outputKind);
+  updateRegixPinWarning();
+}
+function invalidateRegixPreview() {
+  window.regixPreviewFiles=undefined;
+  const required=Boolean(document.querySelector('[data-regix-preference="previewRequired"]')?.checked);
+  const files=document.getElementById('regixOutputKind')?.value==='files';
+  document.querySelectorAll('[data-action="regixOpenPreview"],[data-action="regixCopyPreview"]').forEach(button=>button.disabled=required);
+  const all=document.querySelector('[data-action="regixOpenPreview"][data-target="all"]');if(all)all.disabled=required||!files;
+  setRegixPreviewTargets(files?'files':'snippet');
+  text('regixPreviewCode','Aperçu invalide. Prévisualisez de nouveau avant utilisation.');
+  document.getElementById('regixExplanations')?.replaceChildren();
+  const values=document.getElementById('regixGeneratedValues');if(values){values.replaceChildren();values.hidden=true;}
+  text('regixPreviewStatus',required?'Les choix ou préférences ont changé. Prévisualisez de nouveau avant ouverture.':'Aucun aperçu courant; l’ouverture recalculera le code.');
+}
+function updateRegixPinWarning() {
+  const pin=document.getElementById('regixPinSelect');const mode=document.getElementById('regixGpioMode');const warning=document.getElementById('regixPinWarning');
+  if(!pin||!mode||!warning)return;
+  const selectedPin=pin.options[pin.selectedIndex];const maximum=Number(selectedPin?.dataset.maxSpeed||50);
+  const name=selectedPin?.value||'GPIO';const defaultFunction=selectedPin?.dataset.defaultFunction||'';const electricalNote=selectedPin?.dataset.electricalNote||'';const remapRequired=selectedPin?.dataset.remapRequired||'';const debugUnavailable=/(SWDIO|SWCLK|JTDI|JTDO|NJTRST)/.test(defaultFunction);
+  const unavailable=debugUnavailable||Boolean(remapRequired);
+  let selectedAllowed=true;
+  [...mode.options].forEach(option=>{const modeUnavailable=unavailable||(option.dataset.output==='true'&&Number(option.dataset.speed||0)>maximum);option.disabled=modeUnavailable;if(option.selected&&modeUnavailable)selectedAllowed=false;});
+  if(!selectedAllowed){const safe=[...mode.options].find(option=>!option.disabled);if(safe)mode.value=safe.value;}
+  const notes=[];
+  if(remapRequired)notes.push(name+' nécessite '+remapRequired+'; REGIX v0.1 ne configure pas ce remappage.');
+  else if(debugUnavailable)notes.push('REGIX v0.1 ne modifie pas AFIO_MAPR pour libérer les broches de débogage. Choisissez une autre broche.');
+  if(electricalNote)notes.push(electricalNote);
+  else if(defaultFunction)notes.push('Fonction par défaut signalée par la fiche technique : '+defaultFunction+'. Vérifiez le montage visé.');
+  warning.hidden=notes.length===0;
+  warning.textContent=notes.join(' ');
+  const generate=document.querySelector('[data-action="regixGenerate"]');if(generate)generate.disabled=unavailable;
+}
+function updateBitOperationControls() {
+  const operation=document.getElementById('regixBitOperation')?.value;
+  const extraction=operation==='readBits';
+  ['regixBitOffset','regixBitWidth'].forEach(id=>{const node=document.getElementById(id);if(node)node.disabled=!extraction;});
+  const operandB=document.getElementById('regixBitOperandB');if(operandB)operandB.disabled=operation==='not'||extraction;
+}
+document.getElementById('regixPreferencesForm').addEventListener('change',event=>{
+  const changed=event.target.closest('[data-regix-preference]');if(!changed)return;
+  const preferences=regixPreferencesFromForm();applyRegixPreferences(preferences);invalidateRegixPreview();
+  const key=changed.dataset.regixPreference;
+  vscode.postMessage({type:'regixSavePreferences',preferences:{[key]:preferences[key]}});
+});
+document.getElementById('regixPinSelect').addEventListener('change',()=>{updateRegixPinWarning();invalidateRegixPreview();});
+document.getElementById('regixGpioMode').addEventListener('change',invalidateRegixPreview);
+document.getElementById('regixRegisterSelect').addEventListener('change',event=>vscode.postMessage({type:'regixSelectRegister',registerId:event.target.value}));
+document.getElementById('regixBitOperation').addEventListener('change',updateBitOperationControls);
+updateBitOperationControls();
+function renderRegixRegister(register) {
+  const container=document.getElementById('regixRegisterDetail');if(!container||!register)return;
+  container.replaceChildren();
+  const summary=document.createElement('div');summary.className='regix-register-summary';
+  for(const [label,value] of [['Adresse',register.address],['Offset',register.offset],['Largeur / accès',register.width+' bits · '+register.accessLabel]]){
+    const row=document.createElement('div');row.className='row';const key=document.createElement('span');key.className='muted';key.textContent=label;const data=document.createElement('span');data.className='value';data.textContent=value;row.append(key,data);summary.appendChild(row);
+  }
+  const table=document.createElement('table');const head=document.createElement('thead');const heading=document.createElement('tr');
+  ['Champ','Bits','Largeur','Masque','Accès'].forEach(value=>{const cell=document.createElement('th');cell.textContent=value;heading.appendChild(cell);});head.appendChild(heading);table.appendChild(head);
+  const body=document.createElement('tbody');(Array.isArray(register.fields)?register.fields:[]).forEach(field=>{
+    const row=document.createElement('tr');for(const value of [field.name,field.range,field.width,field.mask,field.accessLabel]){const cell=document.createElement('td');cell.textContent=String(value??'');row.appendChild(cell);}body.appendChild(row);
+  });table.appendChild(body);const wrapper=document.createElement('div');wrapper.className='terminal-output regix-field-list';wrapper.appendChild(table);container.append(summary,wrapper);
+  const note=document.createElement('p');note.className='muted';note.textContent='Lecture avec effet : '+(register.readSideEffects?'oui':'non')+' · Écriture avec effet : '+(register.writeSideEffects?'oui':'non')+' · '+register.writeSemantics;container.appendChild(note);
+}
+function renderRegixPreview(preview) {
+  if(!preview||typeof preview!=='object')return;
+  window.regixPreviewFiles=preview;
+  const target=document.getElementById('regixPreviewTarget');target.textContent='';
+  (preview.targets||[]).forEach(item=>{const option=document.createElement('option');option.value=item.id;option.textContent=item.label;target.appendChild(option);});
+  const targetId=target.value||preview.targets?.[0]?.id;
+  target.value=targetId;
+  const code=preview.code?.[targetId]||'';document.getElementById('regixPreviewCode').textContent=code||'Aucun code pour ce format.';
+  const explanations=document.getElementById('regixExplanations');explanations.replaceChildren();
+  (preview.explanations||[]).forEach(line=>{const item=document.createElement('p');item.textContent=line;explanations.appendChild(item);});
+  const warnings=document.getElementById('regixPreviewStatus');warnings.textContent=(preview.warnings||[]).join(' ')+(preview.previewRequired?' Aperçu vérifié; ouverture disponible.':' Aperçu calculé.');
+  const values=document.getElementById('regixGeneratedValues');values.hidden=false;values.replaceChildren();
+  Object.entries(preview.values||{}).forEach(([name,value])=>{const item=document.createElement('p');item.textContent=name+': '+value;values.appendChild(item);});
+  document.querySelectorAll('[data-action="regixOpenPreview"],[data-action="regixCopyPreview"]').forEach(button=>button.disabled=false);
+  const all=document.querySelector('[data-action="regixOpenPreview"][data-target="all"]');if(all)all.disabled=preview.outputKind!=='files';
+}
+document.getElementById('regixPreviewTarget').addEventListener('change',event=>{
+  const preview=window.regixPreviewFiles;if(!preview)return;const code=preview.code?.[event.target.value]||'';document.getElementById('regixPreviewCode').textContent=code;
+});
+window.regixPreviewFiles=undefined;
 document.addEventListener('click',event=>{
   const button=event.target.closest('button'); if(!button || button.disabled) return;
   if(button.dataset.panel) { route(button.dataset.panel); return; }
   const type=button.dataset.action; if(!type) return;
+  if(type==='regixGenerate') {
+    vscode.postMessage({type:'regixGenerate',deviceId:document.getElementById('regixDeviceSelect').value,pinId:document.getElementById('regixPinSelect').value,modeId:document.getElementById('regixGpioMode').value});return;
+  }
+  if(type==='regixCalculate') {
+    vscode.postMessage({type:'regixCalculate',operation:document.getElementById('regixBitOperation').value,left:document.getElementById('regixBitOperandA').value,right:document.getElementById('regixBitOperandB').value,offset:Number(document.getElementById('regixBitOffset').value),width:Number(document.getElementById('regixBitWidth').value)});return;
+  }
+  if(type==='regixOpenPreview'||type==='regixCopyPreview') {
+    const previewTarget=button.dataset.target==='all'?'all':document.getElementById('regixPreviewTarget').value;
+    vscode.postMessage({type:type==='regixOpenPreview'?'regixOpenPreview':'regixCopyPreview',target:previewTarget,deviceId:document.getElementById('regixDeviceSelect').value,pinId:document.getElementById('regixPinSelect').value,modeId:document.getElementById('regixGpioMode').value});return;
+  }
   if(type==='refreshSettings') settingsDirty=false;
   const message={type};
   if(type==='serialGraphControl') message.action=button.dataset.graphAction;
@@ -165,6 +284,12 @@ function appendSerialLines(lines) {
 window.addEventListener('message',event=>{
   const msg=event.data;if(!msg || typeof msg!=='object') return;
   if(msg.type==='navigate' && routes.includes(msg.panel)) {route(msg.panel);return;}
+  if(msg.type==='regixSettings') applyRegixPreferences(msg.preferences);
+  if(msg.type==='regixPreviewInvalidated') invalidateRegixPreview();
+  if(msg.type==='regixRegister') renderRegixRegister(msg.register);
+  if(msg.type==='regixPreview') renderRegixPreview(msg.preview);
+  if(msg.type==='regixCalculation') text('regixBitResult',msg.result);
+  if(msg.type==='regixActionStatus') text('regixPreviewStatus',msg.text);
   if(msg.type==='dashboardState') {renderViews(msg.views);text('heroProject',msg.state.projectName);text('heroLastCommand',msg.state.lastCommand);}
   if(msg.type==='projectDiscovery') renderViews(msg.views);
   if(msg.type==='progress') progress(msg.progress);

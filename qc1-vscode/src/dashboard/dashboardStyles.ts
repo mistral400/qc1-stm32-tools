@@ -45,7 +45,7 @@ button, input, select, textarea { font: inherit; }
   top: 0;
   z-index: 2;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 4px;
   padding: 6px 0 8px;
   border-bottom: 1px solid var(--qc1-border);
@@ -157,6 +157,19 @@ ul { padding-left: 20px; }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.regix-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.regix-title h2 { margin-bottom: 2px; }
+.regix-field-list { max-height: 320px; margin-top: 10px; overflow: auto; white-space: normal; }
+.regix-field-list table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.regix-field-list th, .regix-field-list td { padding: 4px 5px; border-bottom: 1px solid var(--qc1-border); text-align: left; overflow-wrap: anywhere; }
+.regix-field-list th { position: sticky; top: 0; background: var(--qc1-card); }
+.regix-check-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; margin: 8px 0; }
+.regix-preview-controls { margin-top: 10px; }
+.regix-preview-controls pre { max-height: 460px; white-space: pre; overflow: auto; }
+.regix-values { padding: 4px 8px; border-left: 2px solid var(--qc1-focus); font-family: var(--vscode-editor-font-family, monospace); }
+.regix-values p { margin: 4px 0; overflow-wrap: anywhere; }
+#regixExplanations p { margin: 6px 0; }
+#regixExpertSection[hidden] { display: none !important; }
 label { display: block; margin: 11px 0 4px; }
 input:not([type="checkbox"]), select, textarea {
   display: block;

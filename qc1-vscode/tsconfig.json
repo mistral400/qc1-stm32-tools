@@ -5,6 +5,7 @@
     "outDir": "out",
     "rootDir": "src",
     "lib": ["ES2022"],
+    "resolveJsonModule": true,
     "sourceMap": true,
     "strict": true
   },

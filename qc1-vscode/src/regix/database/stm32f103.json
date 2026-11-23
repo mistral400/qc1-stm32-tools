@@ -1,0 +1,153 @@
+{
+  "schemaVersion": "1.0.0",
+  "databaseVersion": "0.1.0",
+  "sources": [
+    {
+      "id": "rm0008",
+      "title": "STM32F101xx/102xx/103xx/105xx/107xx reference manual",
+      "document": "RM0008",
+      "revision": "21",
+      "url": "https://www.st.com/resource/en/reference_manual/rm0008-.pdf",
+      "license": "STMicroelectronics document; copyright and reuse terms apply. This database stores a limited, manually transcribed set of factual register values and does not redistribute the PDF."
+    },
+    {
+      "id": "ds5319",
+      "title": "STM32F103x8/xB medium-density datasheet",
+      "document": "DS5319",
+      "revision": "20",
+      "url": "https://www.st.com/resource/en/datasheet/stm32f103cb.pdf",
+      "license": "STMicroelectronics document; copyright and reuse terms apply. This database stores a limited, manually transcribed set of factual package and electrical values and does not redistribute the PDF."
+    },
+    {
+      "id": "cmsis-device-f1",
+      "title": "STMicroelectronics CMSIS Device F1",
+      "document": "cmsis-device-f1",
+      "revision": "v4.3.3",
+      "url": "https://github.com/STMicroelectronics/cmsis-device-f1/tree/v4.3.3/Include",
+      "license": "BSD 3-Clause as stated in the referenced ST CMSIS device headers. REGIX does not bundle CMSIS source files."
+    }
+  ],
+  "core": "Cortex-M3",
+  "cmsis": {
+    "deviceHeader": "stm32f1xx.h",
+    "deviceHeaderVersion": "v4.3.3",
+    "deviceDefine": "STM32F103xB",
+    "sourceId": "cmsis-device-f1"
+  },
+  "deviceModels": [
+    {
+      "id": "STM32F103CBT6",
+      "partNumber": "STM32F103CBT6",
+      "family": "STM32F103",
+      "cmsisClass": "STM32F103xB",
+      "core": "Cortex-M3",
+      "flashKiB": 128,
+      "sramKiB": 20,
+      "packageId": "LQFP48",
+      "status": "course-reference",
+      "sourceIds": ["ds5319", "cmsis-device-f1"]
+    },
+    {
+      "id": "STM32F103C8T6",
+      "partNumber": "STM32F103C8T6",
+      "family": "STM32F103",
+      "cmsisClass": "STM32F103xB",
+      "core": "Cortex-M3",
+      "flashKiB": 64,
+      "sramKiB": 20,
+      "packageId": "LQFP48",
+      "status": "neighbor-model",
+      "sourceIds": ["ds5319", "cmsis-device-f1"]
+    }
+  ],
+  "packages": [
+    {
+      "id": "LQFP48",
+      "name": "LQFP48",
+      "pinCount": 48,
+      "sourceId": "ds5319",
+      "pins": [
+        {"name":"PC13","physicalPin":2,"port":"C","index":13,"maxOutputMHz":2,"maxLoadPf":30,"maxSinkCurrentMilliamp":3,"canSourceCurrent":false,"electricalNote":"PC13-PC15 are limited to 2 MHz output and 30 pF maximum load. Their power switch can sink only 3 mA; these pins must not be used as a current source (for example, to drive an LED)."},
+        {"name":"PC14","physicalPin":3,"port":"C","index":14,"maxOutputMHz":2,"maxLoadPf":30,"maxSinkCurrentMilliamp":3,"canSourceCurrent":false,"electricalNote":"PC13-PC15 are limited to 2 MHz output and 30 pF maximum load. Their power switch can sink only 3 mA; these pins must not be used as a current source (for example, to drive an LED). Confirm the LSE oscillator is unused before GPIO output.","defaultFunction":"OSC32_IN"},
+        {"name":"PC15","physicalPin":4,"port":"C","index":15,"maxOutputMHz":2,"maxLoadPf":30,"maxSinkCurrentMilliamp":3,"canSourceCurrent":false,"electricalNote":"PC13-PC15 are limited to 2 MHz output and 30 pF maximum load. Their power switch can sink only 3 mA; these pins must not be used as a current source (for example, to drive an LED). Confirm the LSE oscillator is unused before GPIO output.","defaultFunction":"OSC32_OUT"},
+        {"name":"PD0","physicalPin":5,"port":"D","index":0,"defaultFunction":"OSC_IN","alternateFunction":"PD0 when remapped","remapRequired":"AFIO_MAPR.PD01_REMAP"},
+        {"name":"PD1","physicalPin":6,"port":"D","index":1,"defaultFunction":"OSC_OUT","alternateFunction":"PD1 when remapped","remapRequired":"AFIO_MAPR.PD01_REMAP"},
+        {"name":"PA0","physicalPin":10,"port":"A","index":0,"defaultFunction":"PA0-WKUP"},
+        {"name":"PA1","physicalPin":11,"port":"A","index":1},
+        {"name":"PA2","physicalPin":12,"port":"A","index":2},
+        {"name":"PA3","physicalPin":13,"port":"A","index":3},
+        {"name":"PA4","physicalPin":14,"port":"A","index":4},
+        {"name":"PA5","physicalPin":15,"port":"A","index":5},
+        {"name":"PA6","physicalPin":16,"port":"A","index":6},
+        {"name":"PA7","physicalPin":17,"port":"A","index":7},
+        {"name":"PB0","physicalPin":18,"port":"B","index":0},
+        {"name":"PB1","physicalPin":19,"port":"B","index":1},
+        {"name":"PB2","physicalPin":20,"port":"B","index":2,"defaultFunction":"BOOT1"},
+        {"name":"PB10","physicalPin":21,"port":"B","index":10},
+        {"name":"PB11","physicalPin":22,"port":"B","index":11},
+        {"name":"PB12","physicalPin":25,"port":"B","index":12},
+        {"name":"PB13","physicalPin":26,"port":"B","index":13},
+        {"name":"PB14","physicalPin":27,"port":"B","index":14},
+        {"name":"PB15","physicalPin":28,"port":"B","index":15},
+        {"name":"PA8","physicalPin":29,"port":"A","index":8},
+        {"name":"PA9","physicalPin":30,"port":"A","index":9},
+        {"name":"PA10","physicalPin":31,"port":"A","index":10},
+        {"name":"PA11","physicalPin":32,"port":"A","index":11},
+        {"name":"PA12","physicalPin":33,"port":"A","index":12},
+        {"name":"PA13","physicalPin":34,"port":"A","index":13,"defaultFunction":"SWDIO/JTMS"},
+        {"name":"PA14","physicalPin":37,"port":"A","index":14,"defaultFunction":"SWCLK/JTCK"},
+        {"name":"PA15","physicalPin":38,"port":"A","index":15,"defaultFunction":"JTDI"},
+        {"name":"PB3","physicalPin":39,"port":"B","index":3,"defaultFunction":"JTDO/TRACESWO"},
+        {"name":"PB4","physicalPin":40,"port":"B","index":4,"defaultFunction":"NJTRST"},
+        {"name":"PB5","physicalPin":41,"port":"B","index":5},
+        {"name":"PB6","physicalPin":42,"port":"B","index":6},
+        {"name":"PB7","physicalPin":43,"port":"B","index":7},
+        {"name":"PB8","physicalPin":45,"port":"B","index":8},
+        {"name":"PB9","physicalPin":46,"port":"B","index":9}
+      ]
+    }
+  ],
+  "peripheralBases": {
+    "RCC": "0x40021000",
+    "GPIOA": "0x40010800",
+    "GPIOB": "0x40010C00",
+    "GPIOC": "0x40011000",
+    "GPIOD": "0x40011400",
+    "GPIOE": "0x40011800"
+  },
+  "registers": {
+    "RCC": [
+      {
+        "name": "APB2ENR",
+        "offset": 24,
+        "width": 32,
+        "access": "read-write",
+        "readSideEffects": false,
+        "writeSideEffects": false,
+        "writeSemantics": "normal",
+        "sourceIds": ["rm0008"],
+        "fields": [
+          {"name":"AFIOEN","lsb":0,"width":1,"access":"read-write"},
+          {"name":"IOPAEN","lsb":2,"width":1,"access":"read-write"},
+          {"name":"IOPBEN","lsb":3,"width":1,"access":"read-write"},
+          {"name":"IOPCEN","lsb":4,"width":1,"access":"read-write"},
+          {"name":"IOPDEN","lsb":5,"width":1,"access":"read-write"},
+          {"name":"IOPEEN","lsb":6,"width":1,"access":"read-write"},
+          {"name":"ADC1EN","lsb":9,"width":1,"access":"read-write"},
+          {"name":"ADC2EN","lsb":10,"width":1,"access":"read-write"},
+          {"name":"TIM1EN","lsb":11,"width":1,"access":"read-write"},
+          {"name":"SPI1EN","lsb":12,"width":1,"access":"read-write"},
+          {"name":"USART1EN","lsb":14,"width":1,"access":"read-write"}
+        ]
+      }
+    ],
+    "GPIO": [
+      {"name":"CRL","offset":0,"width":32,"access":"read-write","readSideEffects":false,"writeSideEffects":false,"writeSemantics":"normal","fieldLayout":"gpioConfigLow","sourceIds":["rm0008"]},
+      {"name":"CRH","offset":4,"width":32,"access":"read-write","readSideEffects":false,"writeSideEffects":false,"writeSemantics":"normal","fieldLayout":"gpioConfigHigh","sourceIds":["rm0008"]},
+      {"name":"IDR","offset":8,"width":32,"access":"read-only","readSideEffects":false,"writeSideEffects":false,"writeSemantics":"normal","fieldLayout":"gpioInputBits","sourceIds":["rm0008"]},
+      {"name":"ODR","offset":12,"width":32,"access":"read-write","readSideEffects":false,"writeSideEffects":false,"writeSemantics":"normal","fieldLayout":"gpioOutputBits","sourceIds":["rm0008"]},
+      {"name":"BSRR","offset":16,"width":32,"access":"write-only","readSideEffects":false,"writeSideEffects":true,"writeSemantics":"command","fieldLayout":"gpioSetResetBits","sourceIds":["rm0008"]},
+      {"name":"BRR","offset":20,"width":32,"access":"write-only","readSideEffects":false,"writeSideEffects":true,"writeSemantics":"command","fieldLayout":"gpioResetBits","sourceIds":["rm0008"]}
+    ]
+  }
+}

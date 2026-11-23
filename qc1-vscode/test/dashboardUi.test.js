@@ -15,12 +15,13 @@ function stateFor(family) {
   return state;
 }
 
-test("dashboard navigation exposes five labelled tabs and hides inactive panels accessibly", () => {
+test("dashboard navigation exposes six labelled tabs and hides inactive panels accessibly", () => {
   const html = getDashboardHtml(defaultDashboardState);
   assert.match(html, /role="tablist" aria-label="Navigation QC1"/);
   for (const [tab, panel] of [
     ["projectTab", "projectPanel"], ["buildTab", "buildPanel"], ["toolsTab", "toolsPanel"],
     ["diagnosticsTab", "diagnosticsPanel"], ["settingsTab", "settingsPanel"],
+    ["regixTab", "regixPanel"],
   ]) {
     assert.match(html, new RegExp(`id="${tab}"[^>]*aria-controls="${panel}"`));
     assert.match(html, new RegExp(`id="${panel}"[^>]*aria-labelledby="${tab}"`));

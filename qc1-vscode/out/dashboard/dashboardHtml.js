@@ -10,6 +10,7 @@ const buildView_1 = require("./buildView");
 const toolsView_1 = require("./toolsView");
 const diagnosticsView_1 = require("./diagnosticsView");
 const settingsView_1 = require("./settingsView");
+const regixView_1 = require("../regix/ui/regixView");
 const dashboardStyles_1 = require("./dashboardStyles");
 const dashboardClient_1 = require("./dashboardClient");
 function renderDashboardViews(state) {
@@ -27,6 +28,7 @@ function getDashboardHtml(state, initialPanel = "projectPanel") {
         { panel: "toolsPanel", tab: "toolsTab", label: "Outils", compact: "Outils" },
         { panel: "diagnosticsPanel", tab: "diagnosticsTab", label: "Diagnostics", compact: "Diag." },
         { panel: "settingsPanel", tab: "settingsTab", label: "Réglages", compact: "Régl." },
+        { panel: "regixPanel", tab: "regixTab", label: "REGIX / Registres", compact: "REGIX" },
     ];
     return `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';"><style>${dashboardStyles_1.dashboardStyles}</style></head>
@@ -39,7 +41,8 @@ function getDashboardHtml(state, initialPanel = "projectPanel") {
       <p>Erreurs <span id="analysisErrors">0</span> · Warnings <span id="analysisWarnings">0</span></p><p id="analysisExplanation" class="muted">Aucune sortie analysée.</p><div id="analysisList"></div></section></section>
     <section id="toolsPanel" class="panel${initialPanel === "toolsPanel" ? " active" : ""}" role="tabpanel" aria-labelledby="toolsTab" tabindex="0" aria-hidden="${initialPanel !== "toolsPanel"}" ${initialPanel !== "toolsPanel" ? "hidden" : ""}><div id="toolsContent">${views.toolsContent}</div></section>
     <section id="diagnosticsPanel" class="panel${initialPanel === "diagnosticsPanel" ? " active" : ""}" role="tabpanel" aria-labelledby="diagnosticsTab" tabindex="0" aria-hidden="${initialPanel !== "diagnosticsPanel"}" ${initialPanel !== "diagnosticsPanel" ? "hidden" : ""}><div id="diagnosticsContent">${views.diagnosticsContent}</div></section>
-    <section id="settingsPanel" class="panel${initialPanel === "settingsPanel" ? " active" : ""}" role="tabpanel" aria-labelledby="settingsTab" tabindex="0" aria-hidden="${initialPanel !== "settingsPanel"}" ${initialPanel !== "settingsPanel" ? "hidden" : ""}>${(0, settingsView_1.renderSettingsView)()}</section></main>
+    <section id="settingsPanel" class="panel${initialPanel === "settingsPanel" ? " active" : ""}" role="tabpanel" aria-labelledby="settingsTab" tabindex="0" aria-hidden="${initialPanel !== "settingsPanel"}" ${initialPanel !== "settingsPanel" ? "hidden" : ""}>${(0, settingsView_1.renderSettingsView)()}</section>
+    <section id="regixPanel" class="panel${initialPanel === "regixPanel" ? " active" : ""}" role="tabpanel" aria-labelledby="regixTab" tabindex="0" aria-hidden="${initialPanel !== "regixPanel"}" ${initialPanel !== "regixPanel" ? "hidden" : ""}><div id="regixContent">${(0, regixView_1.renderRegixView)()}</div></section></main>
     <script nonce="${nonce}">${dashboardClient_1.dashboardClient}</script></body></html>`;
 }
 //# sourceMappingURL=dashboardHtml.js.map

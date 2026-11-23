@@ -15,6 +15,21 @@ export const qc1WindowScopedSettings: ReadonlySet<string> = new Set([
   "enablePointerVisualizer",
   "pointerVisualizerMaxDepth",
   "visualizerTheme",
+  "regix.deviceId",
+  "regix.boardProfileId",
+  "regix.mode",
+  "regix.comments",
+  "regix.commentsLanguage",
+  "regix.showHex",
+  "regix.showBin",
+  "regix.showDec",
+  "regix.explainOffsetsAndMasks",
+  "regix.macroPrefix",
+  "regix.functionPrefix",
+  "regix.emitDefines",
+  "regix.outputKind",
+  "regix.previewRequired",
+  "regix.expertMode",
 ]);
 
 export function isQc1WindowScopedSetting(key: string): boolean {

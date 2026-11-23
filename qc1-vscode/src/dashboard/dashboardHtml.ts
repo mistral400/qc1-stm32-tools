@@ -7,10 +7,11 @@ import { renderBuildView } from "./buildView";
 import { renderToolsView } from "./toolsView";
 import { renderDiagnosticsView } from "./diagnosticsView";
 import { renderSettingsView } from "./settingsView";
+import { renderRegixView } from "../regix/ui/regixView";
 import { dashboardStyles } from "./dashboardStyles";
 import { dashboardClient } from "./dashboardClient";
 
-export type DashboardPanelId = "projectPanel" | "buildPanel" | "toolsPanel" | "diagnosticsPanel" | "settingsPanel";
+export type DashboardPanelId = "projectPanel" | "buildPanel" | "toolsPanel" | "diagnosticsPanel" | "settingsPanel" | "regixPanel";
 
 export function renderDashboardViews(state: DashboardState): Record<string, string> {
   return {
@@ -27,6 +28,7 @@ export function getDashboardHtml(state: DashboardState, initialPanel: DashboardP
     { panel: "toolsPanel", tab: "toolsTab", label: "Outils", compact: "Outils" },
     { panel: "diagnosticsPanel", tab: "diagnosticsTab", label: "Diagnostics", compact: "Diag." },
     { panel: "settingsPanel", tab: "settingsTab", label: "Réglages", compact: "Régl." },
+    { panel: "regixPanel", tab: "regixTab", label: "REGIX / Registres", compact: "REGIX" },
   ];
   return `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';"><style>${dashboardStyles}</style></head>
@@ -39,6 +41,7 @@ export function getDashboardHtml(state: DashboardState, initialPanel: DashboardP
       <p>Erreurs <span id="analysisErrors">0</span> · Warnings <span id="analysisWarnings">0</span></p><p id="analysisExplanation" class="muted">Aucune sortie analysée.</p><div id="analysisList"></div></section></section>
     <section id="toolsPanel" class="panel${initialPanel === "toolsPanel" ? " active" : ""}" role="tabpanel" aria-labelledby="toolsTab" tabindex="0" aria-hidden="${initialPanel !== "toolsPanel"}" ${initialPanel !== "toolsPanel" ? "hidden" : ""}><div id="toolsContent">${views.toolsContent}</div></section>
     <section id="diagnosticsPanel" class="panel${initialPanel === "diagnosticsPanel" ? " active" : ""}" role="tabpanel" aria-labelledby="diagnosticsTab" tabindex="0" aria-hidden="${initialPanel !== "diagnosticsPanel"}" ${initialPanel !== "diagnosticsPanel" ? "hidden" : ""}><div id="diagnosticsContent">${views.diagnosticsContent}</div></section>
-    <section id="settingsPanel" class="panel${initialPanel === "settingsPanel" ? " active" : ""}" role="tabpanel" aria-labelledby="settingsTab" tabindex="0" aria-hidden="${initialPanel !== "settingsPanel"}" ${initialPanel !== "settingsPanel" ? "hidden" : ""}>${renderSettingsView()}</section></main>
+    <section id="settingsPanel" class="panel${initialPanel === "settingsPanel" ? " active" : ""}" role="tabpanel" aria-labelledby="settingsTab" tabindex="0" aria-hidden="${initialPanel !== "settingsPanel"}" ${initialPanel !== "settingsPanel" ? "hidden" : ""}>${renderSettingsView()}</section>
+    <section id="regixPanel" class="panel${initialPanel === "regixPanel" ? " active" : ""}" role="tabpanel" aria-labelledby="regixTab" tabindex="0" aria-hidden="${initialPanel !== "regixPanel"}" ${initialPanel !== "regixPanel" ? "hidden" : ""}><div id="regixContent">${renderRegixView()}</div></section></main>
     <script nonce="${nonce}">${dashboardClient}</script></body></html>`;
 }

@@ -84,6 +84,7 @@ const serialMonitor_1 = require("./qc1/serialMonitor");
 const serialPlotProtocol_1 = require("./qc1/serialPlotProtocol");
 const operationTimeline_1 = require("./qc1/operationTimeline");
 const diagnosticGuidance_1 = require("./qc1/diagnosticGuidance");
+const regix_1 = require("./regix");
 // État métier unique partagé par les Webviews QC1 et la TreeView native.
 let dashboardState = dashboardState_1.defaultDashboardState;
 const dashboardWebviews = new Set();
@@ -96,7 +97,7 @@ let embeddedCmakePath = "";
 let embeddedGccPath = "";
 function isDashboardPanelId(value) {
     return value === "projectPanel" || value === "buildPanel" || value === "toolsPanel"
-        || value === "diagnosticsPanel" || value === "settingsPanel";
+        || value === "diagnosticsPanel" || value === "settingsPanel" || value === "regixPanel";
 }
 let embeddedNinjaPath = "";
 const hardwareResources = new hardwareResources_1.HardwareResourceCoordinator();
@@ -1491,6 +1492,9 @@ class QC1PanelProvider {
         this.watchers = [];
         this.operationHistory = new operationHistory_1.ProjectOperationHistory();
         this.serialMonitor = new serialMonitor_1.SerialMonitorService();
+        this.lastRegixPreviews = new Map();
+        this.regixSettingsUpdate = Promise.resolve();
+        this.warnedRegixSettings = new Set();
         this.serialPlotParser = new serialPlotProtocol_1.SerialPlotLineParser();
         this.serialPlotHistory = new serialPlotProtocol_1.BoundedSerialPlotHistory(1000);
         this.serialPorts = [];
@@ -1581,7 +1585,15 @@ class QC1PanelProvider {
             return;
         this.initialized = true;
         this.disposables.push(vscode.workspace.onDidChangeConfiguration((event) => {
-            if (event.affectsConfiguration("qc1"))
+            if (event.affectsConfiguration("qc1.regix")) {
+                this.lastRegixPreviews.clear();
+                this.sendRegixPreferences();
+                postDashboardMessage({ type: "regixPreviewInvalidated" });
+            }
+            const configuration = this.context.extension.packageJSON?.contributes?.configuration;
+            const sections = Array.isArray(configuration) ? configuration : [configuration];
+            const nonRegixKeys = sections.flatMap((section) => Object.keys(section?.properties || {}).filter((key) => key.startsWith("qc1.") && !key.startsWith("qc1.regix.")));
+            if (nonRegixKeys.some((key) => event.affectsConfiguration(key)))
                 this.scheduleContextRefresh();
         }), vscode.workspace.onDidChangeWorkspaceFolders(() => this.scheduleContextRefresh(true)));
         void this.refreshManagerContext(true).catch((error) => outputChannel?.appendLine(`[QC1] Projet: ${String(error)}`));
@@ -1778,14 +1790,16 @@ class QC1PanelProvider {
         webview.options = { enableScripts: true, localResourceRoots: [this.extensionUri] };
         webview.html = (0, dashboardHtml_1.getDashboardHtml)(dashboardState, initialPanel);
         dashboardWebviews.add(webview);
-        const messages = webview.onDidReceiveMessage((message) => this.handleWebviewMessage(message));
-        return { dispose: () => { dashboardWebviews.delete(webview); messages.dispose(); } };
+        const messages = webview.onDidReceiveMessage((message) => this.handleWebviewMessage(message, webview));
+        return { dispose: () => { dashboardWebviews.delete(webview); this.lastRegixPreviews.delete(webview); messages.dispose(); } };
     }
-    initializeWebviewState() {
+    initializeWebviewState(webview) {
         this.sendSettings();
         this.sendToolsStatus();
         this.sendTerminalMeta();
         this.sendOutputSnapshot();
+        this.sendRegixPreferences(webview);
+        this.sendRegixRegister("GPIOC_CRH", webview);
         this.sendAnalysis({
             errors: dashboardState.build.errors,
             warnings: dashboardState.build.warnings,
@@ -1822,7 +1836,10 @@ class QC1PanelProvider {
                 this.editorPanelSubscription = undefined;
             }
         });
-        this.initializeWebviewState();
+        this.initializeWebviewState(panel.webview);
+    }
+    openRegix() {
+        this.openEditorDashboard("regixPanel");
     }
     async selectProjectFromTree(projectPath) {
         const candidate = dashboardState.projectDiscovery.candidates
@@ -1835,7 +1852,7 @@ class QC1PanelProvider {
         if (this.recent.paths().includes(projectPath))
             await this.selectProjectPath(projectPath);
     }
-    async handleWebviewMessage(message) {
+    async handleWebviewMessage(message, sourceWebview) {
         const msg = (0, webviewMessages_1.parseWebviewMessage)(message);
         if (!msg || this.disposed)
             return;
@@ -1955,6 +1972,24 @@ class QC1PanelProvider {
                 case "serialGraphControl":
                     await this.controlSerialGraph(msg.action);
                     break;
+                case "regixSelectRegister":
+                    this.sendRegixRegister(msg.registerId, sourceWebview);
+                    break;
+                case "regixSavePreferences":
+                    await this.saveRegixPreferences(msg.preferences);
+                    break;
+                case "regixGenerate":
+                    await this.publishRegixPreview({ deviceId: msg.deviceId, pinId: msg.pinId, modeId: msg.modeId }, sourceWebview);
+                    break;
+                case "regixOpenPreview":
+                    await this.openRegixPreview({ deviceId: msg.deviceId, pinId: msg.pinId, modeId: msg.modeId }, msg.target, sourceWebview);
+                    break;
+                case "regixCopyPreview":
+                    await this.copyRegixPreview({ deviceId: msg.deviceId, pinId: msg.pinId, modeId: msg.modeId }, msg.target, sourceWebview);
+                    break;
+                case "regixCalculate":
+                    this.calculateRegixValue(msg, sourceWebview);
+                    break;
                 case "clearOperationHistory":
                     this.operationTimeline.clear();
                     dashboardState = { ...dashboardState, operationHistory: [] };
@@ -1999,8 +2034,12 @@ class QC1PanelProvider {
             }
         }
         catch (error) {
-            outputChannel?.appendLine(`[QC1] Action échouée: ${String(error)}`);
-            this.postStatus("Action QC1 échouée", "error");
+            if (msg.type.startsWith("regix"))
+                this.postRegixActionStatus(String(error instanceof Error ? error.message : error), sourceWebview);
+            else {
+                outputChannel?.appendLine(`[QC1] Action échouée: ${String(error)}`);
+                this.postStatus("Action QC1 échouée", "error");
+            }
         }
     }
     /** Appelé par VS Code lorsque la barre latérale QC1 doit être créée. */
@@ -2008,7 +2047,7 @@ class QC1PanelProvider {
         const attachment = this.attachWebview(webviewView.webview);
         this.disposables.push(attachment);
         this.disposables.push(webviewView.onDidDispose(() => attachment.dispose()));
-        this.initializeWebviewState();
+        this.initializeWebviewState(webviewView.webview);
     }
     /** Regroupe les réglages exposés à l'onglet Paramètres de la Webview. */
     getConfig() {
@@ -3693,6 +3732,186 @@ class QC1PanelProvider {
             settings: this.getConfig()
         });
     }
+    currentRegixPreferences() {
+        const config = vscode.workspace.getConfiguration("qc1.regix");
+        const raw = {};
+        const safe = { ...regix_1.defaultRegixPreferences };
+        const invalidKeys = [];
+        for (const key of Object.keys(regix_1.defaultRegixPreferences))
+            raw[key] = config.get(key, regix_1.defaultRegixPreferences[key]);
+        for (const key of Object.keys(regix_1.defaultRegixPreferences)) {
+            try {
+                safe[key] = (0, regix_1.validateRegixPreferences)({ ...regix_1.defaultRegixPreferences, [key]: raw[key] })[key];
+            }
+            catch {
+                invalidKeys.push(String(key));
+            }
+        }
+        for (const key of invalidKeys) {
+            if (!this.warnedRegixSettings.has(key))
+                outputChannel?.appendLine(`[REGIX] Réglage qc1.regix.${key} invalide; valeur par défaut utilisée.`);
+            this.warnedRegixSettings.add(key);
+        }
+        for (const key of this.warnedRegixSettings)
+            if (!invalidKeys.includes(key))
+                this.warnedRegixSettings.delete(key);
+        return (0, regix_1.validateRegixPreferences)(safe);
+    }
+    sendRegixPreferences(webview) {
+        const message = { type: "regixSettings", preferences: this.currentRegixPreferences() };
+        if (webview)
+            void webview.postMessage(message);
+        else
+            postDashboardMessage(message);
+    }
+    async saveRegixPreferences(preferences) {
+        this.regixSettingsUpdate = this.regixSettingsUpdate.catch(() => undefined).then(async () => {
+            const config = vscode.workspace.getConfiguration("qc1.regix");
+            const target = (0, projectConfiguration_1.projectWriteTarget)(Boolean(vscode.workspace.workspaceFolders?.length || vscode.workspace.workspaceFile));
+            const writeTarget = target === "workspace" ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
+            for (const key of Object.keys(preferences)) {
+                const value = preferences[key];
+                if (value !== undefined)
+                    await config.update(key, value, writeTarget);
+            }
+        });
+        await this.regixSettingsUpdate;
+        this.lastRegixPreviews.clear();
+        this.sendRegixPreferences();
+        postDashboardMessage({ type: "regixPreviewInvalidated" });
+    }
+    sendRegixRegister(registerId, webview) {
+        const register = (0, regix_1.getRegister)(registerId);
+        const fields = register.fields.map((field) => {
+            const end = field.lsb + field.width - 1;
+            return {
+                name: field.name,
+                range: field.width === 1 ? String(field.lsb) : `${end}:${field.lsb}`,
+                width: field.width,
+                mask: (0, regix_1.formatUnsigned32)((0, regix_1.getRegisterField)(register, field.name).mask).hex,
+                accessLabel: field.access.toUpperCase(),
+            };
+        });
+        const accessLabels = { "read-only": "RO · lecture seule", "read-write": "RW · lecture/écriture", "write-only": "WO · écriture seule", "write-one-to-clear": "W1C" };
+        const message = {
+            type: "regixRegister",
+            register: {
+                id: register.id,
+                address: (0, regix_1.formatAddress)(register.address),
+                offset: (0, regix_1.formatAddress)(register.offset),
+                width: register.width,
+                accessLabel: accessLabels[register.access],
+                readSideEffects: register.readSideEffects,
+                writeSideEffects: register.writeSideEffects,
+                writeSemantics: register.writeSemantics,
+                fields,
+                sources: (0, regix_1.getRegisterSources)(register).map((source) => `${source.document} rév. ${source.revision}`),
+            },
+        };
+        if (webview)
+            void webview.postMessage(message);
+        else
+            postDashboardMessage(message);
+    }
+    regixPreviewMatches(request, preferences, webview) {
+        const preview = this.lastRegixPreviews.get(webview);
+        return Boolean(preview &&
+            JSON.stringify(preview.request) === JSON.stringify(request) &&
+            JSON.stringify(preview.preferences) === JSON.stringify(preferences));
+    }
+    getRegixPreview(request, preferences, webview) {
+        const matches = this.regixPreviewMatches(request, preferences, webview);
+        const preview = this.lastRegixPreviews.get(webview);
+        if (preferences.previewRequired && !matches)
+            throw new Error("Prévisualisez d'abord la même broche et le même mode avec les préférences actuelles.");
+        if (matches && preview)
+            return preview.generated;
+        const generated = (0, regix_1.generateGpioCCode)(request, preferences);
+        this.lastRegixPreviews.set(webview, { request: { ...request }, preferences: { ...preferences }, generated });
+        return generated;
+    }
+    async publishRegixPreview(request, webview) {
+        await this.regixSettingsUpdate;
+        const preferences = (0, regix_1.validateRegixPreferences)({ ...this.currentRegixPreferences(), deviceId: request.deviceId });
+        const generated = (0, regix_1.generateGpioCCode)(request, preferences);
+        this.lastRegixPreviews.set(webview, { request: { ...request }, preferences: { ...preferences }, generated });
+        const code = {};
+        const targets = [];
+        if (generated.outputKind === "snippet") {
+            code.snippet = generated.snippet || "";
+            targets.push({ id: "snippet", label: "Extrait C" });
+        }
+        else {
+            code.header = generated.header || "";
+            code.source = generated.source || "";
+            targets.push({ id: "header", label: generated.headerFileName || "Fichier .h" });
+            targets.push({ id: "source", label: generated.sourceFileName || "Fichier .c" });
+        }
+        const valueText = (value) => {
+            const bases = (0, regix_1.formatUnsigned32)(value);
+            return [preferences.showHex ? `HEX ${bases.hex}` : "", preferences.showBin ? `BIN ${bases.bin}` : "", preferences.showDec ? `DEC ${bases.dec}` : ""].filter(Boolean).join(" · ");
+        };
+        void webview.postMessage({
+            type: "regixPreview",
+            preview: {
+                outputKind: generated.outputKind,
+                targets,
+                code,
+                explanations: generated.explanations,
+                warnings: generated.warnings,
+                values: Object.fromEntries(Object.entries(generated.values).map(([name, value]) => [name, valueText(value)])),
+                previewRequired: preferences.previewRequired,
+            },
+        });
+    }
+    async openRegixOutput(code, title, webview) {
+        const document = await vscode.workspace.openTextDocument({ language: "c", content: code });
+        await vscode.window.showTextDocument(document, { preview: false, viewColumn: vscode.ViewColumn.Active });
+        this.postRegixActionStatus(`${title} ouvert dans un onglet C non enregistré.`, webview);
+    }
+    async openRegixPreview(request, target, webview) {
+        await this.regixSettingsUpdate;
+        const preferences = (0, regix_1.validateRegixPreferences)({ ...this.currentRegixPreferences(), deviceId: request.deviceId });
+        const generated = this.getRegixPreview(request, preferences, webview);
+        if (target === "all") {
+            if (generated.outputKind !== "files" || !generated.header || !generated.source)
+                throw new Error("Le format sélectionné ne produit pas une paire .h/.c.");
+            await this.openRegixOutput(generated.header, generated.headerFileName || "Fichier .h", webview);
+            await this.openRegixOutput(generated.source, generated.sourceFileName || "Fichier .c", webview);
+            return;
+        }
+        const code = target === "snippet" ? generated.snippet : target === "header" ? generated.header : generated.source;
+        if (!code)
+            throw new Error("La cible d'aperçu ne correspond pas au format généré.");
+        const title = target === "header" ? generated.headerFileName || "Fichier .h" : target === "source" ? generated.sourceFileName || "Fichier .c" : "Extrait REGIX";
+        await this.openRegixOutput(code, title, webview);
+    }
+    async copyRegixPreview(request, target, webview) {
+        await this.regixSettingsUpdate;
+        const preferences = (0, regix_1.validateRegixPreferences)({ ...this.currentRegixPreferences(), deviceId: request.deviceId });
+        const generated = this.getRegixPreview(request, preferences, webview);
+        const code = target === "snippet" ? generated.snippet : target === "header" ? generated.header : generated.source;
+        if (!code)
+            throw new Error("La cible d'aperçu ne correspond pas au format généré.");
+        await vscode.env.clipboard.writeText(code);
+        this.postRegixActionStatus("Code prévisualisé copié dans le presse-papiers.", webview);
+    }
+    calculateRegixValue(message, webview) {
+        const value = (0, regix_1.calculateBits)(message.operation, message.left, message.right, message.width, message.offset);
+        const bases = (0, regix_1.formatUnsigned32)(value);
+        const preferences = this.currentRegixPreferences();
+        const output = [preferences.showHex ? `HEX ${bases.hex}` : "", preferences.showBin ? `BIN ${bases.bin}` : "", preferences.showDec ? `DEC ${bases.dec}` : ""].filter(Boolean).join(" · ");
+        const description = message.operation === "readBits"
+            ? `Lecture des ${message.width} bit(s) à partir du décalage ${message.offset}.`
+            : `Opération ${message.operation.toUpperCase()} sur des valeurs non signées de 32 bits.`;
+        void webview.postMessage({ type: "regixCalculation", result: `${description}\n${output}` });
+    }
+    postRegixActionStatus(text, webview) {
+        if (webview)
+            void webview.postMessage({ type: "regixActionStatus", text });
+        else
+            postDashboardMessage({ type: "regixActionStatus", text });
+    }
     sendToolsStatus() {
         syncDashboardState(this.context);
         this.sendDashboardState();
@@ -3852,7 +4071,7 @@ async function activate(context) {
     refreshDashboard();
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(QC1PanelProvider.viewType, provider));
     dashboardTreeProvider = new dashboardTreeProvider_1.QC1DashboardTreeProvider(() => dashboardState);
-    context.subscriptions.push(dashboardTreeProvider, vscode.window.registerTreeDataProvider(dashboardTreeProvider_1.QC1DashboardTreeProvider.viewId, dashboardTreeProvider), vscode.commands.registerCommand("qc1.openDashboard", () => provider.openEditorDashboard()), vscode.commands.registerCommand("qc1.openDashboardPage", (page) => {
+    context.subscriptions.push(dashboardTreeProvider, vscode.window.registerTreeDataProvider(dashboardTreeProvider_1.QC1DashboardTreeProvider.viewId, dashboardTreeProvider), vscode.commands.registerCommand("qc1.openDashboard", () => provider.openEditorDashboard()), vscode.commands.registerCommand("qc1.openRegix", () => provider.openRegix()), vscode.commands.registerCommand("qc1.openDashboardPage", (page) => {
         if (isDashboardPanelId(page))
             provider.openEditorDashboard(page);
     }), vscode.commands.registerCommand("qc1.selectProjectFromTree", async (projectPath) => {

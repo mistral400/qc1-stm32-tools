@@ -72,6 +72,7 @@
     "onCommand:qc1.status",
     "onCommand:qc1.selectStlink",
     "onCommand:qc1.createDiagnosticReport",
+    "onCommand:qc1.openRegix",
     "workspaceContains:**/.cproject",
     "workspaceContains:**/.project"
   ],
@@ -239,6 +240,12 @@
         "icon": "$(open-preview)"
       },
       {
+        "command": "qc1.openRegix",
+        "title": "REGIX: Ouvrir l’explorateur de registres",
+        "category": "QC1 STM32",
+        "icon": "$(symbol-namespace)"
+      },
+      {
         "command": "qc1.dev",
         "title": "QC1: Dev Mode"
       }
@@ -304,6 +311,9 @@
         },
         {
           "command": "qc1.openDashboard"
+        },
+        {
+          "command": "qc1.openRegix"
         }
       ],
       "view/title": [
@@ -518,6 +528,52 @@
             "default": "auto",
             "scope": "window",
             "description": "Visualizer theme"
+          },
+          "qc1.regix.deviceId": {
+            "type": "string",
+            "enum": ["STM32F103CBT6", "STM32F103C8T6"],
+            "default": "STM32F103CBT6",
+            "scope": "window",
+            "description": "Modèle logiciel sélectionné dans REGIX; cette valeur ne confirme pas la puce physique."
+          },
+          "qc1.regix.boardProfileId": {
+            "type": "string",
+            "enum": ["unconfirmed"],
+            "default": "unconfirmed",
+            "scope": "window",
+            "description": "Profil de carte REGIX. Aucun profil de carte TEP n'est confirmé dans cette version."
+          },
+          "qc1.regix.mode": {
+            "type": "string",
+            "enum": ["bare-metal", "cmsis"],
+            "default": "bare-metal",
+            "scope": "window",
+            "description": "Mode de génération REGIX."
+          },
+          "qc1.regix.comments": {
+            "type": "string",
+            "enum": ["none", "simple", "detailed"],
+            "default": "detailed",
+            "scope": "window",
+            "description": "Niveau des commentaires générés par REGIX."
+          },
+          "qc1.regix.commentsLanguage": {
+            "type": "string",
+            "enum": ["fr", "en"],
+            "default": "fr",
+            "scope": "window",
+            "description": "Langue des commentaires REGIX."
+          },
+          "qc1.regix.showHex": {"type":"boolean","default":true,"scope":"window","description":"Afficher les valeurs hexadécimales dans REGIX."},
+          "qc1.regix.showBin": {"type":"boolean","default":true,"scope":"window","description":"Afficher les valeurs binaires dans REGIX."},
+          "qc1.regix.showDec": {"type":"boolean","default":true,"scope":"window","description":"Afficher les valeurs décimales dans REGIX."},
+          "qc1.regix.explainOffsetsAndMasks": {"type":"boolean","default":true,"scope":"window","description":"Expliquer les décalages et les masques dans REGIX."},
+          "qc1.regix.macroPrefix": {"type":"string","default":"REGIX","maxLength":32,"scope":"window","description":"Préfixe des constantes générées par REGIX."},
+          "qc1.regix.functionPrefix": {"type":"string","default":"REGIX","maxLength":32,"scope":"window","description":"Préfixe des fonctions générées par REGIX."},
+          "qc1.regix.emitDefines": {"type":"boolean","default":true,"scope":"window","description":"Émettre les constantes REGIX en #define plutôt qu'en const typés."},
+          "qc1.regix.outputKind": {"type":"string","enum":["snippet","files"],"default":"snippet","scope":"window","description":"Prévisualiser un extrait C ou une paire de fichiers .h/.c."},
+          "qc1.regix.previewRequired": {"type":"boolean","default":true,"scope":"window","description":"Exiger une prévisualisation avant d'ouvrir la génération dans un onglet non enregistré."},
+          "qc1.regix.expertMode": {"type":"boolean","default":false,"scope":"window","description":"Afficher les outils de calcul générique de bits et de champs REGIX."
           }
         }
       }

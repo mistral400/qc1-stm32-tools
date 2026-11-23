@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:qc1:regix:gpio-recipe-schema:1.0.0",
+  "title": "REGIX GPIO configuration recipe",
+  "type": "object",
+  "required": ["schemaVersion", "recipeVersion", "id", "supportedPeripherals", "modes"],
+  "properties": {
+    "schemaVersion": {"const": "1.0.0"},
+    "recipeVersion": {"type": "string"},
+    "id": {"type": "string"},
+    "supportedPeripherals": {"type": "array", "items": {"type": "string"}},
+    "modes": {"type": "array", "items": {"type": "object", "required": ["id", "labelFr", "labelEn", "mode", "cnf", "output"], "properties": {"id": {"type": "string"}, "labelFr": {"type": "string"}, "labelEn": {"type": "string"}, "mode": {"type": "integer", "minimum": 0, "maximum": 3}, "cnf": {"type": "integer", "minimum": 0, "maximum": 3}, "output": {"type": "boolean"}, "speedMHz": {"type": "number"}, "odr": {"type": "integer", "enum": [0, 1]}}, "additionalProperties": false}}
+  },
+  "additionalProperties": false
+}

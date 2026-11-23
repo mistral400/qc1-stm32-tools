@@ -24,9 +24,9 @@ function stateFor(family, ids) {
   } };
 }
 
-test("navigation has five real pages and context actions preserve F1/H755 modes", () => {
+test("navigation has six real pages and context actions preserve F1/H755 modes", () => {
   const html = getDashboardHtml(defaultDashboardState);
-  for (const id of ["projectPanel", "buildPanel", "toolsPanel", "diagnosticsPanel", "settingsPanel"]) assert.ok(html.includes(`id="${id}"`));
+  for (const id of ["projectPanel", "buildPanel", "toolsPanel", "diagnosticsPanel", "settingsPanel", "regixPanel"]) assert.ok(html.includes(`id="${id}"`));
   assert.ok(html.includes('id="resetModeInput"'));
   assert.ok(html.includes('value="connect-under-reset"'));
   assert.ok(availableProjectCommands(stateFor("STM32F1", ["cortex-m3"])).includes("debug"));
@@ -133,7 +133,7 @@ function clientHarness() {
       addEventListener(type, callback) { this.listeners[type] = callback; }, appendChild() {}, closest() { return this; } });
     return nodes.get(id);
   }
-  const panels = ["projectPanel", "buildPanel", "toolsPanel", "diagnosticsPanel", "settingsPanel"].map(node);
+  const panels = ["projectPanel", "buildPanel", "toolsPanel", "diagnosticsPanel", "settingsPanel", "regixPanel"].map(node);
   const tabs = panels.map((panel) => ({ ...node(panel.id + "Tab"), dataset: { panel: panel.id } }));
   let persistent = { activePanel: "toolsPanel" };
   const document = {
